@@ -1,0 +1,25 @@
+# Vite / Node
+node_modules
+.vite
+# Legacy Next.js build folders from prior runs
+.next
+.next-build
+.next-dev
+.next-verify
+.vercel
+*.tsbuildinfo
+dist
+dist-verify
+coverage
+
+# Package manager logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Explorer-local env files
+.env
+.env.*
+!.env.example
+!.env.*.example
