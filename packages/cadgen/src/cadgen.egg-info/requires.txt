@@ -1,0 +1,4 @@
+build123d
+cadquery-ocp
+ezdxf
+shapely

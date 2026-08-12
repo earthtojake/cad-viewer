@@ -1,341 +1,269 @@
 import fs from "node:fs";
+import http from "node:http";
+import net from "node:net";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import {
-  DEFAULT_EXPLORER_ROOT_DIR,
-  EXPLORER_SKIPPED_DIRECTORIES,
-  isCatalogRelevantPath,
-  isServedCadAsset,
-  normalizeExplorerRootDir,
-  repoRelativePath,
-  resolveExplorerRoot,
-  scanCadDirectory,
-} from "./lib/cadDirectoryScanner.mjs";
-import {
-  normalizeExplorerDefaultFile,
-  normalizeExplorerGithubUrl,
-} from "./lib/explorerConfig.mjs";
-import {
-  DEFAULT_EXPLORER_PORT,
-  buildExplorerServerInfo,
-  normalizeExplorerPort,
-} from "./lib/explorerServerInfo.mjs";
-import {
-  removeExplorerServerRegistryEntry,
-  writeExplorerServerRegistry,
-} from "./lib/explorerServerRegistry.mjs";
-import {
-  pathIsInside,
-  resolveWorkspaceRoot as resolveViewerWorkspaceRoot,
-} from "./lib/pathUtils.mjs";
 
-const explorerPort = normalizeExplorerPort(process.env.EXPLORER_PORT, DEFAULT_EXPLORER_PORT);
-const explorerAppRoot = path.dirname(fileURLToPath(import.meta.url));
-const defaultWorkspaceRoot = path.resolve(explorerAppRoot, "../../../..");
-const workspaceRoot = resolveWorkspaceRoot();
-const repoRoot = workspaceRoot;
-const buildExplorerRootDir = normalizeExplorerRootDir(process.env.EXPLORER_ROOT_DIR ?? DEFAULT_EXPLORER_ROOT_DIR);
-const buildExplorerDefaultFile = normalizeExplorerDefaultFile(process.env.EXPLORER_DEFAULT_FILE ?? "");
-const buildExplorerGithubUrl = normalizeExplorerGithubUrl(process.env.EXPLORER_GITHUB_URL ?? "");
-const explorerAllowedHosts = normalizeExplorerAllowedHosts(process.env.EXPLORER_ALLOWED_HOSTS ?? "");
+import { cadPythonExecutable, cadPythonEnv } from "./scripts/cad-python.mjs";
+import { resolveDirectoryRoot as resolveViewerDirectoryRoot } from "./scripts/directoryRoot.mjs";
+import { resolveServerFsAllow } from "./scripts/serverFsAllow.mjs";
+import { assertNoDeprecatedLocalRootEnv } from "./scripts/viewerEnv.mjs";
+import {
+  normalizeServerLifetimeMs,
+  scheduleProcessShutdown,
+} from "./scripts/serverLifetime.mjs";
 
-function normalizeExplorerAllowedHosts(value) {
+const DEFAULT_VIEWER_PORT = 3245;
+
+const viewerAppRoot = path.dirname(fileURLToPath(import.meta.url));
+const viewerClientRoot = path.join(viewerAppRoot, "src", "client");
+const cadJsPackageRoot = resolveCadJsPackageRoot();
+const viewerNodeModulesRoot = path.join(viewerAppRoot, "node_modules");
+const defaultDirectoryRoot = path.resolve(viewerAppRoot, "..");
+const directoryRoot = resolveDirectoryRoot();
+const repoRoot = directoryRoot;
+const viewerAllowedHosts = normalizeViewerAllowedHosts(process.env.VIEWER_ALLOWED_HOSTS ?? "");
+const viewerServerLifetimeMs = normalizeServerLifetimeMs(process.env.VIEWER_SERVER_LIFETIME_MS);
+assertNoDeprecatedLocalRootEnv(process.env);
+
+function normalizeViewerAllowedHosts(value) {
   return String(value || "")
     .split(",")
     .map((host) => host.trim())
     .filter(Boolean);
 }
 
-function resolveWorkspaceRoot() {
-  return resolveViewerWorkspaceRoot({
+function readViewerPackageVersion(appRoot) {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
+    return String(packageJson.version || "");
+  } catch {
+    return "";
+  }
+}
+
+function findRootPackageSrc(packageDirName) {
+  let current = viewerAppRoot;
+  for (;;) {
+    const candidate = path.join(current, "packages", packageDirName, "src");
+    if (
+      fs.existsSync(candidate) &&
+      fs.existsSync(path.join(current, "packages", packageDirName, "package.json"))
+    ) {
+      return candidate;
+    }
+    const next = path.dirname(current);
+    if (next === current) {
+      return "";
+    }
+    current = next;
+  }
+}
+
+function resolveCadJsPackageRoot() {
+  const bundledPackageSrc = path.join(viewerAppRoot, "packages", "cadjs", "src");
+  if (fs.existsSync(bundledPackageSrc)) {
+    return bundledPackageSrc;
+  }
+  const rootPackageSrc = findRootPackageSrc("cadjs");
+  if (rootPackageSrc) {
+    return rootPackageSrc;
+  }
+  const installedPackageSrc = path.join(viewerAppRoot, "node_modules", "cadjs", "src");
+  if (fs.existsSync(installedPackageSrc)) {
+    return installedPackageSrc;
+  }
+  // Nothing resolved: name the in-app path so the failure points at this
+  // checkout rather than escaping to a parent workbench that may not exist.
+  return bundledPackageSrc;
+}
+
+function resolveDirectoryRoot() {
+  return resolveViewerDirectoryRoot({
     env: process.env,
     cwd: process.cwd(),
-    appRoot: explorerAppRoot,
-    defaultWorkspaceRoot,
+    appRoot: viewerAppRoot,
+    defaultDirectoryRoot,
   });
 }
 
-function withExplorerConfig(catalog) {
-  return {
-    ...catalog,
-    config: {
-      ...(catalog?.config && typeof catalog.config === "object" ? catalog.config : {}),
-      defaultFile: buildExplorerDefaultFile,
-      githubUrl: buildExplorerGithubUrl,
-    },
-  };
-}
-
-function emptyCatalog(rootDir = DEFAULT_EXPLORER_ROOT_DIR) {
-  const normalizedDir = normalizeExplorerRootDir(rootDir);
-  return {
-    schemaVersion: 3,
-    root: {
-      dir: normalizedDir,
-      name: normalizedDir ? path.basename(normalizedDir) : path.basename(workspaceRoot),
-      path: normalizedDir,
-    },
-    entries: [],
-  };
-}
-
-function readCadCatalog(rootDir = buildExplorerRootDir) {
-  try {
-    return withExplorerConfig(scanCadDirectory({ repoRoot, rootDir }));
-  } catch {
-    return withExplorerConfig(emptyCatalog(rootDir));
-  }
-}
-
-function serveStaticFile(root, req, res, next, { allow } = {}) {
-  const requestPath = String(req.url || "").replace(/\?.*$/, "");
-  let decodedRequestPath = "";
-  try {
-    decodedRequestPath = decodeURIComponent(requestPath);
-  } catch {
-    res.statusCode = 400;
-    res.end("Bad request");
-    return true;
-  }
-  const filePath = path.resolve(root, decodedRequestPath.replace(/^\/+/, ""));
-  if (
-    !(filePath === path.resolve(root) || pathIsInside(filePath, root))
-    || (typeof allow === "function" && !allow(filePath))
-  ) {
-    res.statusCode = 403;
-    res.end("Forbidden");
-    return true;
-  }
-  fs.stat(filePath, (error, stats) => {
-    if (res.destroyed) {
-      return;
-    }
-    if (error || !stats.isFile()) {
-      next();
-      return;
-    }
-    if (path.extname(filePath).toLowerCase() === ".js" || path.extname(filePath).toLowerCase() === ".mjs") {
-      res.setHeader("content-type", "text/javascript; charset=utf-8");
-    }
-    res.setHeader("content-length", String(stats.size));
-    const stream = fs.createReadStream(filePath);
-    res.on("close", () => {
-      if (!res.writableEnded) {
-        stream.destroy();
-      }
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.on("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
     });
-    stream.on("error", () => {
-      if (!res.headersSent) {
-        next();
-      } else {
-        res.destroy();
-      }
-    });
-    stream.pipe(res);
   });
-  return true;
 }
 
-function copyRecursiveFiltered(sourceRoot, destinationRoot, predicate) {
-  if (!fs.existsSync(sourceRoot)) {
-    return;
-  }
-  for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
-    const sourcePath = path.join(sourceRoot, entry.name);
-    const destinationPath = path.join(destinationRoot, entry.name);
-    if (entry.isDirectory()) {
-      if (EXPLORER_SKIPPED_DIRECTORIES.has(entry.name)) {
-        continue;
+function waitForPythonBackend(port, { timeoutMs = 20000, child = null } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    let settled = false;
+    let retryTimer = null;
+    const finish = (ready) => {
+      if (settled) {
+        return;
       }
-      copyRecursiveFiltered(sourcePath, destinationPath, predicate);
-      continue;
-    }
-    if (!predicate(sourcePath)) {
-      continue;
-    }
-    fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-    fs.copyFileSync(sourcePath, destinationPath);
-  }
-}
-
-function sendJson(res, statusCode, payload) {
-  res.statusCode = statusCode;
-  res.setHeader("content-type", "application/json; charset=utf-8");
-  res.setHeader("cache-control", "no-store");
-  res.end(JSON.stringify(payload));
-}
-
-function viteServerPort(server) {
-  const address = server?.httpServer?.address?.();
-  return address && typeof address === "object" && Number.isInteger(address.port)
-    ? address.port
-    : explorerPort;
-}
-
-function cadCatalogPlugin() {
-  const virtualId = "virtual:cad-catalog";
-  const resolvedVirtualId = `\0${virtualId}`;
-  let resolvedConfig = null;
-  const activeDirectories = new Map();
-  const refreshTimers = new Map();
-
-  function activateDirectory(server, rootDir) {
-    const resolved = resolveExplorerRoot(repoRoot, rootDir);
-    const wasActive = activeDirectories.has(resolved.rootPath);
-    activeDirectories.set(resolved.rootPath, resolved.dir);
-    if (!wasActive) {
-      server.watcher.add(resolved.rootPath);
-    }
-    return resolved;
-  }
-
-  function scheduleCatalogRefresh(server, rootPath, dir) {
-    if (refreshTimers.has(rootPath)) {
-      clearTimeout(refreshTimers.get(rootPath));
-    }
-    refreshTimers.set(rootPath, setTimeout(() => {
-      refreshTimers.delete(rootPath);
-      const virtualCatalogModule = server.moduleGraph.getModuleById(resolvedVirtualId);
-      if (virtualCatalogModule) {
-        server.moduleGraph.invalidateModule(virtualCatalogModule);
+      settled = true;
+      if (retryTimer) {
+        clearTimeout(retryTimer);
       }
-      server.ws.send({
-        type: "custom",
-        event: "cad-catalog:changed",
-        data: { dir },
+      child?.off("exit", handleChildExit);
+      resolve(ready);
+    };
+    const handleChildExit = () => finish(false);
+    child?.once("exit", handleChildExit);
+    const retry = () => {
+      if (settled) {
+        return;
+      }
+      if (Date.now() >= deadline) {
+        finish(false);
+        return;
+      }
+      retryTimer = setTimeout(attempt, 250);
+    };
+    const attempt = () => {
+      if (settled) {
+        return;
+      }
+      const req = http.get({ host: "127.0.0.1", port, path: "/__cad/server", timeout: 500 }, (res) => {
+        res.resume();
+        if (res.statusCode === 200) {
+          finish(true);
+        } else {
+          retry();
+        }
       });
-    }, 150));
-  }
-
-  function notifyChangedPath(server, changedPath) {
-    const resolvedChangedPath = path.resolve(changedPath);
-    if (!isCatalogRelevantPath(resolvedChangedPath)) {
+      req.on("error", retry);
+      req.on("timeout", () => {
+        req.destroy();
+      });
+    };
+    if (child && child.exitCode !== null) {
+      finish(false);
       return;
     }
-    for (const [rootPath, dir] of activeDirectories.entries()) {
-      if (resolvedChangedPath === rootPath || pathIsInside(resolvedChangedPath, rootPath)) {
-        scheduleCatalogRefresh(server, rootPath, dir);
-      }
-    }
-  }
+    attempt();
+  });
+}
 
+// Dev mode runs the SAME Python backend as production: Vite serves the client
+// (with HMR) and proxies /__cad/* to a Python server it spawns. The Python
+// backend owns all CAD logic; Vite is purely the frontend dev tool.
+function cadViewerBackendProxyPlugin() {
+  let child = null;
+  let backendPort = 0;
   return {
-    name: "cad-catalog",
-    configResolved(config) {
-      resolvedConfig = config;
-    },
-    resolveId(id) {
-      if (id === virtualId) {
-        return resolvedVirtualId;
+    name: "cad-viewer-python-backend",
+    async configureServer(server) {
+      backendPort = await findFreePort();
+      const env = cadPythonEnv();
+      env.PYTHONPATH = [viewerAppRoot, env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+      env.VIEWER_AGENT_START_MODE = env.VIEWER_AGENT_START_MODE || "dev";
+      // No --dir: a URL path IS the directory. cwd is the backend's only fallback,
+      // used when a request names no directory at all (the bare origin).
+      child = spawn(
+        cadPythonExecutable(repoRoot),
+        ["-m", "server_py.server", "--host", "127.0.0.1", "--port", String(backendPort)],
+        { cwd: directoryRoot, env, stdio: "inherit" },
+      );
+      child.on("error", (error) => {
+        console.error(`Failed to start Python CAD Viewer backend: ${error.message}`);
+      });
+      const ready = await waitForPythonBackend(backendPort, { child });
+      if (!ready) {
+        if (child && child.exitCode === null) {
+          child.kill();
+        }
+        child = null;
+        throw new Error("Python CAD Viewer backend failed startup validation or did not become ready.");
       }
-      return null;
-    },
-    load(id) {
-      if (id !== resolvedVirtualId) {
-        return null;
-      }
-      const catalog = readCadCatalog(buildExplorerRootDir);
-      return `export default ${JSON.stringify(catalog)};`;
-    },
-    configureServer(server) {
-      const servedExplorerRoot = activateDirectory(server, buildExplorerRootDir);
-      let activeServerInfo = null;
-      const currentServerInfo = () => {
-        activeServerInfo = buildExplorerServerInfo({
-          workspaceRoot: repoRoot,
-          rootDir: buildExplorerRootDir,
-          port: viteServerPort(server),
-          pid: process.pid,
+      // Forward every /__cad/* request (method + headers + body + streamed response) to Python.
+      server.middlewares.use((req, res, next) => {
+        if (!req.url || !req.url.startsWith("/__cad/")) {
+          next();
+          return;
+        }
+        const proxyReq = http.request(
+          { host: "127.0.0.1", port: backendPort, path: req.url, method: req.method, headers: req.headers },
+          (proxyRes) => {
+            res.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+            proxyRes.pipe(res);
+          },
+        );
+        proxyReq.on("error", () => {
+          if (!res.headersSent) {
+            res.statusCode = 502;
+          }
+          res.end("CAD Viewer backend proxy error");
         });
-        return activeServerInfo;
+        req.pipe(proxyReq);
+      });
+      const stop = () => {
+        if (child) {
+          child.kill();
+          child = null;
+        }
       };
-      const registerServer = () => {
-        writeExplorerServerRegistry(currentServerInfo());
+      server.httpServer?.once("close", stop);
+      process.once("exit", stop);
+    },
+  };
+}
+
+function serverLifetimePlugin() {
+  return {
+    name: "cad-viewer-server-lifetime",
+    configureServer(server) {
+      if (viewerServerLifetimeMs === null) {
+        return;
+      }
+      let shutdownTimer = null;
+      const scheduleShutdown = () => {
+        shutdownTimer = scheduleProcessShutdown({
+          lifetimeMs: viewerServerLifetimeMs,
+          label: "CAD Viewer dev server",
+          close: () => server.close(),
+        });
       };
       if (server.httpServer?.listening) {
-        registerServer();
+        scheduleShutdown();
       } else {
-        server.httpServer?.once("listening", registerServer);
+        server.httpServer?.once("listening", scheduleShutdown);
       }
       server.httpServer?.once("close", () => {
-        removeExplorerServerRegistryEntry(activeServerInfo || currentServerInfo());
-      });
-      server.middlewares.use((req, res, next) => {
-        const requestUrl = new URL(req.url || "/", "http://localhost");
-        if (requestUrl.pathname !== "/__cad/server") {
-          next();
-          return;
+        if (shutdownTimer) {
+          clearTimeout(shutdownTimer);
         }
-        sendJson(res, 200, currentServerInfo());
-      });
-      server.middlewares.use((req, res, next) => {
-        const requestUrl = new URL(req.url || "/", "http://localhost");
-        if (requestUrl.pathname !== "/__cad/catalog") {
-          next();
-          return;
-        }
-        let catalog;
-        try {
-          const resolved = activateDirectory(server, buildExplorerRootDir);
-          catalog = withExplorerConfig(scanCadDirectory({ repoRoot, rootDir: resolved.dir }));
-        } catch (error) {
-          sendJson(res, 400, {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return;
-        }
-        sendJson(res, 200, catalog);
-      });
-      server.middlewares.use((req, res, next) => {
-        const requestPath = String(req.url || "").replace(/\?.*$/, "");
-        let decodedRequestPath = "";
-        try {
-          decodedRequestPath = decodeURIComponent(requestPath);
-        } catch {
-          next();
-          return;
-        }
-        const candidatePath = path.resolve(repoRoot, decodedRequestPath.replace(/^\/+/, ""));
-        if (!isServedCadAsset(candidatePath)) {
-          next();
-          return;
-        }
-        if (!(candidatePath === servedExplorerRoot.rootPath || pathIsInside(candidatePath, servedExplorerRoot.rootPath))) {
-          res.statusCode = 403;
-          res.end("Forbidden");
-          return;
-        }
-        serveStaticFile(repoRoot, req, res, next, {
-          allow: (filePath) => (
-            isServedCadAsset(filePath) &&
-            (filePath === servedExplorerRoot.rootPath || pathIsInside(filePath, servedExplorerRoot.rootPath))
-          ),
-        });
-      });
-      for (const eventName of ["add", "change", "unlink"]) {
-        server.watcher.on(eventName, (changedPath) => notifyChangedPath(server, changedPath));
-      }
-    },
-    writeBundle() {
-      const outDir = resolvedConfig?.build?.outDir || "dist";
-      const resolved = resolveExplorerRoot(repoRoot, buildExplorerRootDir);
-      const cadDestinationRoot = path.resolve(explorerAppRoot, outDir, repoRelativePath(repoRoot, resolved.rootPath));
-      copyRecursiveFiltered(resolved.rootPath, cadDestinationRoot, (filePath) => {
-        return isServedCadAsset(filePath);
       });
     },
   };
 }
 
-export default defineConfig({
-  root: explorerAppRoot,
-  envPrefix: "EXPLORER_",
-  plugins: [react(), cadCatalogPlugin()],
+export default defineConfig(({ command }) => ({
+  root: viewerAppRoot,
+  envPrefix: "VIEWER_",
+  plugins: [
+    react(),
+    cadViewerBackendProxyPlugin(),
+    serverLifetimePlugin(),
+  ],
   resolve: {
     alias: {
-      "@": explorerAppRoot,
+      "@": viewerClientRoot,
+      "cadjs": cadJsPackageRoot,
+      "clsx": path.join(viewerNodeModulesRoot, "clsx"),
+      "gifenc": path.join(viewerNodeModulesRoot, "gifenc", "dist", "gifenc.esm.js"),
+      "tailwind-merge": path.join(viewerNodeModulesRoot, "tailwind-merge"),
+      "three": path.join(viewerNodeModulesRoot, "three"),
+      "three/examples": path.join(viewerNodeModulesRoot, "three", "examples"),
     },
   },
   esbuild: {
@@ -380,14 +308,21 @@ export default defineConfig({
   },
   server: {
     host: "127.0.0.1",
-    port: explorerPort,
+    port: DEFAULT_VIEWER_PORT,
+    // Fail on a taken port instead of silently rolling to the next one, so dev
+    // matches `npm run start`: a Viewer is always on the port you asked for.
     strictPort: true,
-    allowedHosts: explorerAllowedHosts,
+    allowedHosts: viewerAllowedHosts,
+    fs: {
+      // Real paths too: Vite checks ids after resolution, and the develop layout
+      // reaches cadjs through a symlink. See scripts/serverFsAllow.mjs.
+      allow: resolveServerFsAllow([viewerAppRoot, cadJsPackageRoot], {
+        realpath: fs.realpathSync,
+      }),
+    },
   },
   preview: {
     host: "127.0.0.1",
-    port: explorerPort,
-    strictPort: true,
-    allowedHosts: explorerAllowedHosts,
+    allowedHosts: viewerAllowedHosts,
   },
-});
+}));

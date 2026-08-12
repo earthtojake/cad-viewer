@@ -5,7 +5,7 @@
   "tsx": false,
   "tailwind": {
     "config": "",
-    "css": "app/globals.css",
+    "css": "src/client/styles/globals.css",
     "baseColor": "zinc",
     "cssVariables": true,
     "prefix": ""
@@ -13,9 +13,9 @@
   "iconLibrary": "lucide",
   "aliases": {
     "components": "@/components",
-    "utils": "@/lib/utils",
+    "utils": "@/ui/utils",
     "ui": "@/components/ui",
-    "lib": "@/lib",
+    "lib": "@/ui",
     "hooks": "@/hooks"
   },
   "registries": {}

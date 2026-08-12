@@ -1,8 +1,26 @@
-# CAD Explorer Viewer
+# CAD Viewer
 
-This package contains the CAD Explorer viewer: a Vite/React app for inspecting CAD and robot-description files, plus a package-local snapshot CLI. This README is only for developing and iterating on this viewer package.
+CAD Viewer is a browser workbench for inspecting CAD files,
+robot-description files, and generated CAD artifacts from a URL-selected local
+directory or hosted catalog. It is built for engineering review loops where you
+need to open a model quickly, understand the source tree, copy stable `#...`
+CAD references, and verify generated assets without leaving the browser.
 
-The viewer is read-only with respect to the active scan root. It discovers existing files and colocated viewer assets; it does not generate CAD, run Python, or start robot middleware.
+## Features
+
+- Scans the local directory named by the URL's path and mirrors its folder
+  structure in the sidebar.
+- Opens `.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.dxf`, `.urdf`, `.srdf`,
+  and `.sdf` entries.
+- Uses hidden STEP GLB/topology sidecars for assembly structure, face/edge
+  picking, copied CAD references, and STEP parameter controls.
+- Previews mesh files, DXF flat patterns, URDF/SDF robots, and SRDF group
+  states in one app shell.
+- Runs against either a local filesystem backend or hosted Vercel Blob storage.
+- Can regenerate STEP GLB/topology artifacts and generated-DXF drawing
+  packages when the CAD Python runtime is
+  available.
+- Provides optional MoveIt2 websocket controls for SRDF IK and planning.
 
 ## Quick Start
 
@@ -10,143 +28,144 @@ Run these commands from this directory:
 
 ```bash
 npm install
-npm run dev
 npm run test
 npm run build
 ```
 
-For a root-aware dev server that prints a reusable URL:
+For local development, start the dev server and then pass a local directory and
+directory-relative file path in the URL:
 
 ```bash
-npm run dev:ensure -- \
-  --workspace-root /path/to/workspace \
-  --root-dir models \
-  --file fun/robotic_hand_end_effector.step
+npm run dev -- --host 127.0.0.1
 ```
 
-Use the URL printed by `dev:ensure`; do not assume a fixed port during development.
+Open the URL printed by Vite. A Viewer URL's PATH is the absolute directory to
+open, exactly as in a `file://` URL, and `?file=` selects one artifact within it:
 
-## Package Map
+```text
+http://127.0.0.1:3245/path/to/root?file=assemblies/robot-arm/robot-arm.step
+```
 
-- `main.jsx`: React entrypoint.
-- `components/CadWorkspace.js`: workspace shell, file selection, side panels, and shared viewer state.
-- `components/CadExplorer.js`: 3D CAD, mesh, URDF, SRDF, and SDF scene runtime.
-- `components/DxfExplorer.js`: 2D DXF flat-pattern runtime.
-- `components/workbench/`: workbench controls, file sheets, toolbar, and theme settings UI.
-- `common/`: shared non-React scene, theme, STEP module, topology, and snapshot helpers.
-- `lib/`: file scanning, format parsers, selector runtime, persistence, and viewer utilities.
-- `scripts/ensure-dev.mjs`: reusable dev-server launcher.
-- `snapshot/index.mjs`: headless snapshot CLI.
+The bare origin names no directory and falls back to the server's cwd. One Viewer
+serves any folder — change the path, no restart.
 
-## Data Inputs
+Use `npm run dev` for iterating on the client/backend (HMR), and `npm run start`
+to serve the built `dist/` bundle via the Python backend (the production path the
+`cad-viewer` skill uses). Both listen on `--port`, defaulting to `3245`, and both
+exit with an error when that port is taken rather than reusing a running Viewer or
+rolling onto another port. Local dev and production servers stay running unless
+`VIEWER_SERVER_LIFETIME_MS` is set or production `serve` is started with
+`--shutdown-after <duration>`.
 
-The viewer scans `EXPLORER_ROOT_DIR` under `EXPLORER_WORKSPACE_ROOT`. If `EXPLORER_WORKSPACE_ROOT` is unset, it is inferred from the process working directory. If `EXPLORER_ROOT_DIR` is unset, the workspace root is scanned.
+Install the local Python artifact package when iterating on local STEP
+regeneration:
 
-Supported visible entries:
+```bash
+python -m pip install -r requirements.txt
+```
 
-- `.step` and `.stp`
-- `.stl`
-- `.3mf`
-- `.glb`
-- `.dxf`
-- `.urdf`
-- `.srdf`
-- `.sdf`
+Agent handoff links from the cad-viewer skill must use an absolute directory as
+the URL path, with `?file=` relative to it. The URL is the only source of truth —
+there is no stored fallback, so the same URL always shows the same thing.
 
-STEP entries use colocated hidden GLB sidecars named `.<step-filename>.glb`. For example, `models/part.step` pairs with `models/.part.step.glb`. The GLB may contain the `STEP_topology` extension used for assembly structure, face picking, edge picking, and copied `@cad[...]` references.
+## Project Layout
 
-URDF, SRDF, and SDF entries are parsed directly from XML. Referenced mesh files are resolved relative to the selected robot-description file when possible. SRDF entries use `<explorer:urdf path="..."/>` metadata to locate the linked URDF.
+- `src/client/`: React app, browser state, styling, and viewer/workbench UI.
+- `src/client/components/`: top-level CAD, DXF, workbench, and shadcn-style UI
+  components.
+- `src/client/workbench/`: selection, persistence, file-sheet, alert, motion,
+  and reference helpers that are not React components.
+- `src/client/ui/`: viewer-owned browser utilities such as clipboard, color
+  scheme, class merging, and DOM helpers.
+- `src/shared/`: config helpers shared by the client and the launchers.
+- `server_py/`: the Python backend — local filesystem CAD API (`/__cad/*`),
+  artifact generation, and the production static server for `dist/`.
+- `scripts/`: developer and runtime launchers, the test runner, and the
+  end-to-end sweeps.
+- `docs/`: workflow reference docs for backend storage, browser persistence,
+  render types, settings UI, and MoveIt2.
+- `moveit2_server/`: optional Python websocket backend for SRDF controls.
+- `packages/cadjs`, `packages/implicitjs`, `packages/cadgen`: the shared
+  runtimes this app depends on. Keep reusable parsing, rendering, sidecar,
+  selector, topology, implicit shader, snapshot, and export logic in these
+  packages rather than in `src/`.
 
-## Runtime
+`packages/*` is a symlinked development layout inside the text-to-cad workbench
+and a real vendored copy in a standalone checkout; every path in this app is
+written to work either way.
 
-`npm run dev` starts Vite on `EXPLORER_PORT` with `strictPort`. If that port is occupied, Vite reports the conflict.
+## Common Commands
 
-`npm run dev:ensure` probes existing local viewer servers with `GET /__cad/server`, reuses a matching scan root when possible, and otherwise starts a detached Vite server on the first available port from `EXPLORER_PORT` through `EXPLORER_PORT_END`.
+```bash
+npm run dev          # Vite dev server (HMR) + local CAD API middleware — use for iteration
+npm run build        # Production frontend build (writes dist/)
+npm run start        # Prod launcher: serve the built dist/ + CAD API on 3245 (or --port)
+npm run serve        # Low-level raw Python backend (what `start` spawns)
+npm run test         # Discover and run all JS tests
+```
+
+`npm run test` uses `scripts/run-tests.mjs`, which discovers
+`*.test.js` and `*.test.mjs` under `src/` and `scripts/`. To run specific tests:
+
+```bash
+node scripts/run-tests.mjs src/client/workbench/sidebar.test.js
+node scripts/run-tests.mjs src/shared/viewerConfig.test.mjs
+```
+
+Python backend tests run separately:
+
+```bash
+python -m unittest discover -s server_py/tests -t .
+```
+
+## Runtime Configuration
 
 Important environment variables:
 
-- `EXPLORER_WORKSPACE_ROOT`: base workspace path.
-- `EXPLORER_ROOT_DIR`: scan root relative to the workspace root, or an absolute scan root inside it.
-- `EXPLORER_DEFAULT_FILE`: scan-root-relative file opened when `?file=` is absent.
-- `EXPLORER_PORT`: preferred dev/preview port, default `4178`.
-- `EXPLORER_PORT_END`: optional end of the `dev:ensure` port search range.
-- `EXPLORER_GITHUB_URL`: top-bar GitHub link target.
-- `EXPLORER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and preview.
-- `EXPLORER_MOVEIT2_WS_URL`: optional websocket URL for SRDF MoveIt2 controls in local dev.
-- `EXPLORER_SERVER_REGISTRY`: optional path for the local server registry JSON file.
+- `VIEWER_DEFAULT_FILE`: directory-relative file opened when `?file=` is absent.
+- `VIEWER_SERVER_LIFETIME_MS`: optional server lifetime in milliseconds for
+  local dev and production servers. When unset, there is no automatic shutdown.
+- `VIEWER_GITHUB_URL`: optional top-bar GitHub link target. When set, the
+  version label links to the matching GitHub release tag. For GitHub-hosted
+  repositories, the Viewer also checks the latest release and lightly marks the
+  version label when a newer release is available.
+- `VIEWER_DISCORD_URL`: optional top-bar Discord community link target.
+- `VIEWER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and
+  production servers.
+- `VIEWER_MOVEIT2_WS_URL`: optional websocket URL for SRDF MoveIt2 controls.
+- `VIEWER_CAD_PYTHON`: optional Python executable for local STEP/DXF artifact regeneration.
+- `VIEWER_CAD_PYTHONPATH` / `CAD_PYTHONPATH`: optional Python source path for
+  the `cadgen` package.
 
-Production builds scan at build time. Set `EXPLORER_WORKSPACE_ROOT`, `EXPLORER_ROOT_DIR`, and `EXPLORER_DEFAULT_FILE` before `npm run build` when the static app should include a specific catalog/default file.
+`VIEWER_LOCAL_ROOT_DIR` and `VIEWER_LOCAL_WORKSPACE_ROOT` are removed for local
+filesystem viewing. Setting either variable is a hard startup error; the URL's
+path names the directory instead.
 
-## Persistence
+Production builds contain the frontend and initial catalog module only. CAD
+assets are served by the local backend and are not copied into `dist/`.
 
-URL query params own shareable selection state:
+## Reference Docs
 
-- `?file=` selects the active entry.
-- `?refs=` carries copied CAD references into the workspace.
-- `?moveit2Ws=` overrides `EXPLORER_MOVEIT2_WS_URL` for one local browser session.
-
-Browser storage is intentionally narrow. Theme selection and custom themes are stored by `lib/workbench/persistence.js`. The storage key is `cad-explorer:theme` because it belongs to CAD Explorer viewer UI state.
-
-Workspace state such as panels, directory expansion, drawing state, active tools, and per-file view state is React/session state, not durable browser storage.
-
-## Snapshot CLI
-
-The package-local snapshot CLI creates still images, STEP-module parameter GIFs, SVG sections, and part lists from the same shared scene helpers used by the UI. Use GIFs only for CAD parameter animation review; use still snapshots otherwise.
-
-```bash
-npm run snapshot -- --job path/to/job.json
-npm run snapshot -- --job -
-npm run snapshot -- --input models/part.step --output /tmp/part.png --theme technical
-```
-
-Shortcut flags are for common theme snapshots:
-
-- `--input`
-- `--output`
-- `--mode`
-- `--theme`
-- `--camera`
-- `--width`
-- `--height`
-- `--size-profile`
-- `--view-labels`
-- `--params`
-
-Supported modes are `view`, `orbit`, `section`, and `list`. `--theme` accepts a built-in theme id, an inline JSON theme object, or a path to a JSON theme file. Set `theme.display.mode` to `solid` or `wireframe` for surface/wire output. `--params` targets `.step.js` STEP module sidecar parameters.
-
-The snapshot daemon is optional and managed by the CLI:
-
-```bash
-npm run snapshot -- daemon status
-npm run snapshot -- daemon stop
-```
-
-## UX Contract
-
-- STEP entries expose face picking from visible GLB triangles and edge picking from selector proxy geometry when topology is available.
-- Occurrence, shape, face, and edge references are copied as `@cad[...]` strings.
-- DXF entries are read-only flat-pattern views.
-- URDF and SDF entries show direct robot/model structure with joint sliders when joints are available.
-- SRDF entries show linked-URDF structure, SRDF group-state presets, and optional local MoveIt2 controls when a websocket endpoint is configured.
-- The viewer selects one file at a time.
-- Sidebar grouping follows the exact active scan-root directory structure.
+- [Settings UI guidelines](./docs/settings-ui.md): the mandatory row grammar,
+  spacing, and control standards for file-sheet and theme settings panels.
+- [Backend storage](./docs/backend.md): local filesystem backend contracts.
+- [Browser storage](./docs/storage.md): URL, `localStorage`, and
+  `sessionStorage` ownership.
+- [MoveIt2 server](./docs/moveit2-server.md): optional SRDF websocket backend.
+- [`cadjs` render pipeline](./packages/cadjs/docs/render-pipeline.md): shared
+  render APIs used by the viewer, docs, and snapshot runtime.
+- [`implicitjs` runtime](./packages/implicitjs/README.md): shared implicit CAD
+  model, shader render, snapshot, and export APIs.
 
 ## Verification
 
-Run the full viewer suite before handing off viewer changes:
+Run the focused viewer checks before handing off viewer changes:
 
 ```bash
 npm run test
 npm run build
 ```
 
-Useful targeted checks:
-
-```bash
-node --test --experimental-default-type=module snapshot/snapshot.test.mjs
-node --test --experimental-default-type=module lib/themeSettings.test.js
-node --test --experimental-default-type=module lib/workbench/sidebar.test.js
-node --test --experimental-default-type=module scripts/ensure-dev.test.mjs
-```
-
-For UI changes, also open a representative file with `npm run dev:ensure` and verify the app renders, selection works, and the browser console is clean.
+For UI behavior changes, also run `npm run dev -- --host 127.0.0.1`, open the
+printed URL with `/absolute/root?file=path/to/model.step`, and check that the app
+renders, selection works, and the browser console is clean.

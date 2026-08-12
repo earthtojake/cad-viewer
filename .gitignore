@@ -11,6 +11,12 @@ node_modules
 dist
 dist-verify
 coverage
+tmp
+
+# Python / test caches
+__pycache__
+*.py[cod]
+.pytest_cache
 
 # Package manager logs
 npm-debug.log*
@@ -23,3 +29,6 @@ pnpm-debug.log*
 .env.*
 !.env.example
 !.env.*.example
+
+# Local Python env for the CAD Python runtime
+.venv
