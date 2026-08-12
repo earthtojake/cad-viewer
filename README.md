@@ -70,7 +70,7 @@ there is no stored fallback, so the same URL always shows the same thing.
 
 ## Project Layout
 
-- `src/client/`: React app, browser state, styling, and viewer/workbench UI.
+- `src/client/`: React app, browser state, styling, and viewer + workbench UI.
 - `src/client/components/`: top-level CAD, DXF, workbench, and shadcn-style UI
   components.
 - `src/client/workbench/`: selection, persistence, file-sheet, alert, motion,

@@ -15,6 +15,8 @@ export function useCadWorkspaceShortcuts({
   sidebarOpen,
   previewUiStateRef,
   tabToolMode,
+  measureDraftActive = false,
+  onCancelMeasureDraft = null,
   drawingUndoStackRef,
   drawingRedoStackRef,
   handleUndoDrawing,
@@ -82,6 +84,13 @@ export function useCadWorkspaceShortcuts({
           return;
         }
         if (tabToolMode === TAB_TOOL_MODE.MEASURE) {
+          // Escape cancels the measurement in progress and leaves the tool
+          // armed, the way it does in a CAD measure tool. Only once there is
+          // nothing to cancel does it back out of the tool itself.
+          if (measureDraftActive) {
+            onCancelMeasureDraft?.();
+            return;
+          }
           setTabToolMode(TAB_TOOL_MODE.REFERENCES);
           return;
         }
@@ -114,6 +123,8 @@ export function useCadWorkspaceShortcuts({
     setTabToolsOpen,
     setViewerAlertOpen,
     sidebarOpen,
+    measureDraftActive,
+    onCancelMeasureDraft,
     tabToolMode,
     tabToolsOpen,
     viewerAlertOpen

@@ -203,6 +203,8 @@ import {
   applyMeasureRulerDelete,
   applyMeasureRulerHover,
   applyMeasureRulerPick,
+  cancelMeasureRulerDraft,
+  clearMeasureRulerMeasurements,
   measureRulerStateForChange
 } from "@/workbench/measureRulerState";
 import {
@@ -5233,9 +5235,13 @@ export default function CadWorkspace({
     viewerPickableEdges.length ||
     viewerPickableVertices.length
   );
+  // Measuring needs a mesh to hit, not loaded topology: an assembly measures
+  // across its parts straight away, and topology — once a component is expanded
+  // — upgrades those hits from free points to edge and face snaps.
   const measureModeActive = supportsTopology &&
     tabToolMode === TAB_TOOL_MODE.MEASURE &&
-    hasViewerPickableTopology;
+    Boolean(selectedMeshData) &&
+    !viewerLoading;
   const [measureRulerState, setMeasureRulerState] = useState(null);
   const [activeMeasureId, setActiveMeasureId] = useState("");
   const handleMeasurePick = useCallback((pick) => {
@@ -5247,19 +5253,58 @@ export default function CadWorkspace({
   const handleMeasureDelete = useCallback((measurementId) => {
     setMeasureRulerState((current) => applyMeasureRulerDelete(current, measurementId));
   }, []);
+  const handleMeasureCancelDraft = useCallback(() => {
+    setMeasureRulerState((current) => cancelMeasureRulerDraft(current));
+  }, []);
+  const handleMeasureClear = useCallback(() => {
+    setMeasureRulerState((current) => clearMeasureRulerMeasurements(current));
+  }, []);
+  const measureMeasurements = measureRulerState?.measurements || EMPTY_LIST;
+  // Only rescue the highlight when the row it points at is gone (deleted or
+  // cleared). Taking a new measurement promotes it separately, below; doing it
+  // here as well would fight the user's own row clicks, because a live draft
+  // rewrites this state on every hover tick.
   useEffect(() => {
-    const items = measureRulerState?.measurements || [];
-    setActiveMeasureId(items.length ? items[items.length - 1].id : "");
-  }, [measureRulerState]);
+    setActiveMeasureId((current) => {
+      if (current && measureMeasurements.some((item) => item.id === current)) {
+        return current;
+      }
+      return measureMeasurements.length ? measureMeasurements[measureMeasurements.length - 1].id : "";
+    });
+  }, [measureMeasurements]);
   useEffect(() => {
     setMeasureRulerState((current) => measureRulerStateForChange(current, { entryChanged: true }));
   }, [selectedKey]);
   useEffect(() => {
     setMeasureRulerState((current) => measureRulerStateForChange(current, { toolActive: measureModeActive }));
   }, [measureModeActive]);
-  const measureToolDisabled = viewerLoading ||
-    !selectedMeshData ||
-    !hasViewerPickableTopology;
+  // A new measurement reveals the tab that holds it. Re-appending (rather than
+  // just ensuring membership) moves it to the end, and last-in-pane wins tab
+  // resolution — so it also wins the pane back if the user has since clicked Tree.
+  const measurementCountRef = useRef(0);
+  useEffect(() => {
+    const count = measureMeasurements.length;
+    const grew = count > measurementCountRef.current;
+    measurementCountRef.current = count;
+    if (!grew) {
+      return;
+    }
+    setActiveMeasureId(measureMeasurements[count - 1].id);
+    if (!renderedSelectedFileSheetSectionIds.includes(FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS)) {
+      return;
+    }
+    setTabToolsOpen(true);
+    setFileSheetOpenSectionIds((current) => normalizeFileSheetOpenSectionIds(
+      [
+        ...(Array.isArray(current) ? current : [])
+          .filter((id) => id !== FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS),
+        FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS
+      ],
+      renderedSelectedFileSheetSectionIds
+    ));
+  }, [measureMeasurements, renderedSelectedFileSheetSectionIds, setTabToolsOpen]);
+
+  const measureToolDisabled = viewerLoading || !selectedMeshData || !supportsTopology;
   const topologySelectionActive =
     (isAssemblyView && requestedStepTreeTopologyNodeIds.length > 0) ||
     topLevelReferenceSelectionActive;
@@ -8179,6 +8224,8 @@ export default function CadWorkspace({
     sidebarOpen,
     previewUiStateRef,
     tabToolMode,
+    measureDraftActive: Boolean(measureRulerState?.draft?.anchor),
+    onCancelMeasureDraft: handleMeasureCancelDraft,
     drawingUndoStackRef,
     drawingRedoStackRef,
     handleUndoDrawing,
@@ -8582,10 +8629,6 @@ export default function CadWorkspace({
                 drawToolActive={drawToolActive}
                 measureModeActive={measureModeActive}
                 measureDisabled={measureToolDisabled}
-                measureState={measureRulerState}
-                activeMeasurementId={activeMeasureId}
-                onMeasureActivate={setActiveMeasureId}
-                onMeasureDelete={handleMeasureDelete}
                 panToolActive={panToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 viewerLoading={viewerLoading}
@@ -8635,6 +8678,12 @@ export default function CadWorkspace({
                 selectedEntry={selectedEntry}
                 viewerLoading={viewerLoading || assemblySidebarLoading}
                 isAssemblyView={isAssemblyView}
+                measurements={measureMeasurements}
+                activeMeasurementId={activeMeasureId}
+                measureModeActive={measureModeActive}
+                onMeasurementActivate={setActiveMeasureId}
+                onMeasurementDelete={handleMeasureDelete}
+                onMeasurementsClear={handleMeasureClear}
                 stepTreeRoot={displayStepTreeRoot}
                 assemblyMates={selectedAssemblyMates}
                 expandedTreeNodeIds={expandedStepTreeNodeIds}

@@ -4,7 +4,7 @@ The implicit analogue of :mod:`cadgen.dxf_artifact`, and the SINGLE producer beh
 entrypoints that build an implicit package -- ``skills/implicit-cad/scripts/gen`` and the
 viewer's ``POST /__cad/artifact``. A second producer that assembled the lock, the status
 record and the currency gate by hand is exactly how the defects the coordination refactor
-fixed came to exist (design/unified-glb-render-artifacts.md §4.7).
+fixed came to exist.
 
 The whole body runs inside ``artifact_build``: the lock is held across the freshness
 re-check, the Node mesher, and the descriptor write. The mesher is a CHILD of this process

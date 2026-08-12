@@ -12,7 +12,6 @@ import {
   X
 } from "lucide-react";
 import {
-  hasCapability,
   renderCapabilities,
   supportsTool,
   viewportContentKind,
@@ -24,7 +23,6 @@ import { ToolbarButton } from "./ToolbarButton";
 import { ZoomControl } from "../viewer/ZoomControl";
 import { CAD_WORKSPACE_TOOLBAR_DESKTOP_WIDTH_CLASS } from "./ToolbarShell";
 import { StepExportDropdown } from "./StepExportDropdown";
-import MeasurePanel from "../viewer/MeasurePanel";
 
 const FLOATING_TOOL_BAR_SURFACE_CLASS =
   "cad-glass-surface border border-sidebar-border text-sidebar-foreground shadow-sm";
@@ -127,10 +125,6 @@ function DesktopFloatingToolBar({
   drawToolActive,
   measureModeActive = false,
   measureDisabled = false,
-  measureState = null,
-  activeMeasurementId = "",
-  onMeasureActivate = null,
-  onMeasureDelete = null,
   panToolActive,
   handleSelectTabToolMode,
   viewerLoading,
@@ -206,9 +200,6 @@ function DesktopFloatingToolBar({
       <Focus className="size-3" strokeWidth={2} aria-hidden="true" />
     </ToolbarButton>
   );
-
-  const measurementsCount = measureState?.measurements?.length || 0;
-  const showMeasurePanel = hasCapability(renderFormat, "topology") && (measureModeActive || measurementsCount > 0);
 
   // A drawing's own toolbar, in its own pill to the LEFT of the shared one: 2D and 3D are a
   // property of the drawing being viewed, not a tool that acts on it, so grouping them with
@@ -366,15 +357,6 @@ function DesktopFloatingToolBar({
         </div>
       </TooltipProvider>
 
-      {showMeasurePanel ? (
-        <MeasurePanel
-          measurements={measureState?.measurements || []}
-          activeId={activeMeasurementId}
-          onActivate={onMeasureActivate}
-          onDelete={onMeasureDelete}
-          measureModeActive={measureModeActive}
-        />
-      ) : null}
 
       {!previewMode && supportsTool(renderFormat, "draw") && drawToolActive ? (
         <DrawingToolbar

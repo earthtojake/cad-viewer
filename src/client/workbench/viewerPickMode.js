@@ -21,7 +21,11 @@ export function viewerPickModeForRenderPane({
   if (topologySelectionPending || topologySelectionUnavailable || topologySelectionDeferred) {
     return VIEWER_PICK_MODE.NONE;
   }
-  if (measureMode && topologyPickingActive) {
+  // Measure outranks both part and topology selection, and needs neither. The
+  // endpoint always comes from the ray hit on the visible mesh; loaded topology
+  // only refines that hit into a snap. An assembly with nothing expanded still
+  // measures surface to surface across its parts.
+  if (measureMode) {
     return VIEWER_PICK_MODE.MEASURE;
   }
   if (

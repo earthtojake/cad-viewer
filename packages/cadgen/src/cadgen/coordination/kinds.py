@@ -59,7 +59,7 @@ PHASE_WRITE = "write"
 # in the NODE child (parse the drawing, mesh the flat pattern, write the GLB) while this
 # process holds the lock, so they are declared here -- one run id and one status record span
 # both runtimes, and the bar has to be weighted over the phases it will actually be told
-# about (design/unified-glb-render-artifacts.md §7.4.2).
+# about.
 DRAWING_PACKAGE = ArtifactKind(
     name="drawing-package",
     phases=(PHASE_GENERATE, PHASE_PARSE, PHASE_MESH, PHASE_WRITE, PHASE_FINALIZE),

@@ -1835,6 +1835,10 @@ const CadViewer = forwardRef(function CadViewer({
   const mountRef = useRef(null);
   const drawingCanvasRef = useRef(null);
   const measureCanvasRef = useRef(null);
+  // The snap indicator needs the live hover point every frame; the workspace
+  // only needs to know which entity is under the cursor. Keeping the point in a
+  // ref lets the overlay track smoothly without re-rendering on every move.
+  const measureHoverRef = useRef(null);
   const drawingDraftRef = useRef(null);
   const drawingStrokesRef = useRef(Array.isArray(drawingStrokes) ? drawingStrokes : []);
   const drawingChangeRef = useRef(onDrawingStrokesChange);
@@ -5306,10 +5310,24 @@ const CadViewer = forwardRef(function CadViewer({
     drawingMinStrokeLengthPx: DRAWING_MIN_STROKE_LENGTH_PX
   });
 
+  const handleMeasureHoverPoint = useCallback((pick) => {
+    measureHoverRef.current = pick || null;
+    onMeasureHoverPoint?.(pick);
+  }, [onMeasureHoverPoint]);
+
+  // Disarming the tool has to drop the indicator; the pointer may never move again.
+  useEffect(() => {
+    if (!measureModeActive) {
+      measureHoverRef.current = null;
+    }
+  }, [measureModeActive]);
+
   useViewerMeasureOverlay({
     measureCanvasRef,
     measureState,
     activeMeasurementId,
+    measureHoverRef,
+    measureModeActive,
     runtimeRef,
     mountRef,
     previewMode,
@@ -5334,7 +5352,7 @@ const CadViewer = forwardRef(function CadViewer({
     onDoubleActivateReference,
     onContextReference,
     onMeasurePick,
-    onMeasureHoverPoint,
+    onMeasureHoverPoint: handleMeasureHoverPoint,
     viewerReadyTick,
     suppressTopologyPicking: stepAnimationPlaying
   });

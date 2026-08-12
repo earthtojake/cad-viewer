@@ -82,29 +82,40 @@ test("viewer pick mode keeps measure picking in focused part views", () => {
   );
 });
 
-test("viewer pick mode rejects measure picking without pickable topology", () => {
+test("viewer pick mode measures without pickable topology", () => {
+  // The endpoint comes from the ray hit on the mesh; topology only refines it.
   assert.equal(
     viewerPickModeForRenderPane({ measureMode: true, topologyPickingActive: false }),
-    VIEWER_PICK_MODE.AUTO
+    VIEWER_PICK_MODE.MEASURE
   );
 });
 
-test("viewer pick mode keeps measure picking in assemblies with pickable topology", () => {
+test("viewer pick mode measures in assemblies, with or without loaded topology", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({ viewerMode: "assembly", measureMode: true, topologyPickingActive: true }),
+    VIEWER_PICK_MODE.MEASURE
+  );
+  // Measure outranks part selection, so a click across a bare assembly measures
+  // rather than selecting whichever part sat under the cursor.
   assert.equal(
     viewerPickModeForRenderPane({
       viewerMode: "assembly",
       measureMode: true,
-      topologyPickingActive: true
+      topologyPickingActive: false,
+      assemblyPickingActive: true
     }),
     VIEWER_PICK_MODE.MEASURE
   );
   assert.equal(
-    viewerPickModeForRenderPane({
-      viewerMode: "assembly",
-      measureMode: true,
-      topologyPickingActive: false
-    }),
+    viewerPickModeForRenderPane({ viewerMode: "assembly", measureMode: false, topologyPickingActive: false }),
     VIEWER_PICK_MODE.ASSEMBLY
+  );
+});
+
+test("viewer pick mode still yields to the pan tool while measuring", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({ measureMode: true, panToolActive: true }),
+    VIEWER_PICK_MODE.NONE
   );
 });
 

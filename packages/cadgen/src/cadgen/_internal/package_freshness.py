@@ -1,7 +1,6 @@
 """Descriptor-level freshness primitives shared by BOTH freshness authorities.
 
-A render package's currency is decided twice, by design (see
-``design/unified-glb-render-artifacts.md`` §3.3/§5.3): the viewer's validator
+A render package's currency is decided twice, by design: the viewer's validator
 (``viewer/server_py/artifact.py``) decides what a status GET answers, and the producer's
 per-kind ``is_current`` callable — re-evaluated under the generation lock — decides
 whether a build no-ops. When the two disagree the failure is SILENT rather than loud: the

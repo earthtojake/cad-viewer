@@ -1,4 +1,4 @@
-"""Component-GLB package emit (design/component-glb-artifacts.md).
+"""Component-GLB package emit.
 
 Every model's render artifact is a package directory under the per-folder
 ``__cadgen__`` home, holding one content-addressed component GLB per unique

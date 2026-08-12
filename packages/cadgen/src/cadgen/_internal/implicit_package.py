@@ -9,8 +9,8 @@ viewer shares. The package makes it an ordinary baked mesh:
       model.glb       # the baked mesh (quantized + meshopt-compressed)
 
 **Baked, not live.** The mesh is sampled at the model's ``params.*.default`` values and one
-fixed resolution; live parameters and animations are gone, deliberately and with no opt-in
-(design/unified-glb-render-artifacts.md §0.1). Those settings are invisible to every other
+fixed resolution; live parameters and animations are gone, deliberately and with no
+opt-in. Those settings are invisible to every other
 freshness signal -- the source is unchanged, the payload is present, the closure still hashes
 -- so they are canonicalized into ``bakeHash`` and compared by BOTH freshness authorities.
 

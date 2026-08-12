@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants.js";
 import { classifyMeasurePick, isFinitePoint } from "cadjs/lib/viewer/measurement.js";
+import { buildEdgeLinePositionsFromProxy } from "cadjs/lib/viewer/referenceGeometry.js";
 import { pointVisibleByClipPlane } from "cadjs/lib/viewer/clipPlane.js";
 import { screenLimitedPickThreshold } from "cadjs/lib/viewer/pickingThresholds.js";
 import { createViewerContextMenuGestureState } from "./viewerContextMenuGesture.js";
@@ -42,17 +43,76 @@ export function measureHitPointFromWorldIntersection(intersection) {
   return [x, y, z];
 }
 
+/**
+ * The offset the viewer applies to re-centre the model. Selector geometry — the
+ * edge proxy, `pickData.center` — is authored around the model origin, while a
+ * ray hit is in world space, and these two frames differ by exactly this
+ * translation. The pick groups only ever have their position set (never rotation
+ * or scale), so a vector subtraction is the whole transform.
+ */
+export function measureModelOffsetFromRuntime(runtime) {
+  const position = (runtime?.facePickGroup || runtime?.edgePickGroup || runtime?.modelGroup)?.position;
+  if (!position) {
+    return [0, 0, 0];
+  }
+  return [position.x, position.y, position.z].map((value) => (Number.isFinite(Number(value)) ? Number(value) : 0));
+}
+
+export function measureWorldPointToModel(point, offset) {
+  if (!isFinitePoint(point)) {
+    return null;
+  }
+  const [dx, dy, dz] = offset || [0, 0, 0];
+  return [point[0] - dx, point[1] - dy, point[2] - dz];
+}
+
+export function measureModelPointToWorld(point, offset) {
+  if (!isFinitePoint(point)) {
+    return null;
+  }
+  const [dx, dy, dz] = offset || [0, 0, 0];
+  return [point[0] + dx, point[1] + dy, point[2] + dz];
+}
+
+/**
+ * Snapping runs in the model frame and only the resulting point is lifted back
+ * out to world. Translating the whole edge-segment buffer instead would redo
+ * hundreds of additions on every hover tick to reach the same answer.
+ */
 export function measurePickForPosition({
   reference = null,
   worldHitPoint = null,
   referenceId = "",
-  bypassTopology = false
+  bypassTopology = false,
+  edgeSegments = null,
+  vertexPoint = null,
+  modelOffset = null
 } = {}) {
   const hitPoint = isFinitePoint(worldHitPoint) ? worldHitPoint : null;
   if (bypassTopology) {
     return classifyMeasurePick({ reference: null, hitPoint, referenceId: "" });
   }
-  return classifyMeasurePick({ reference, hitPoint, referenceId: referenceId || "" });
+  const modelHitPoint = measureWorldPointToModel(hitPoint, modelOffset);
+  const pick = classifyMeasurePick({
+    reference,
+    hitPoint: modelHitPoint,
+    referenceId: referenceId || "",
+    edgeSegments,
+    vertexPoint
+  });
+  if (!pick) {
+    return null;
+  }
+  const worldPoint = measureModelPointToWorld(pick.point, modelOffset);
+  if (!worldPoint) {
+    return null;
+  }
+  // A fitted arc centre is a position, so it has to come out to world space with
+  // the point. Radius and direction are translation-invariant and stay as they are.
+  const geometry = isFinitePoint(pick.geometry?.center)
+    ? { ...pick.geometry, center: measureModelPointToWorld(pick.geometry.center, modelOffset) }
+    : pick.geometry;
+  return { ...pick, point: worldPoint, geometry };
 }
 
 function clamp(value, min, max) {
@@ -521,6 +581,19 @@ export function useViewerPicking({
       .map((reference) => String(reference?.id || "").trim())
       .filter(Boolean)
   );
+
+  // Arming the tool has to change the cursor immediately. Leaving it to the next
+  // hover tick means the select pointer lingers until the mouse happens to move.
+  useEffect(() => {
+    const container = mountRef.current;
+    if (!container || pickMode !== VIEWER_PICK_MODE.MEASURE) {
+      return undefined;
+    }
+    container.style.cursor = "crosshair";
+    return () => {
+      container.style.cursor = "";
+    };
+  }, [mountRef, pickMode, previewMode, viewerReadyTick]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -1004,6 +1077,30 @@ export function useViewerPicking({
         .find((candidate) => String(candidate?.id || "").trim() === String(referenceId || "").trim()) || null;
     }
 
+    // Hover re-resolves the same edge on every mouse move, so the last slice is
+    // kept rather than rebuilt each tick.
+    let measureEdgeCache = { referenceId: "", segments: null };
+
+    function measureSnapGeometry(reference, referenceId) {
+      const selectorType = String(reference?.pickData?.selectorType || reference?.selectorType || "")
+        .trim()
+        .toLowerCase();
+      if (selectorType === "vertex") {
+        const center = reference?.pickData?.center;
+        return { edgeSegments: null, vertexPoint: isFinitePoint(center) ? center.slice(0, 3) : null };
+      }
+      if (selectorType !== "edge") {
+        return { edgeSegments: null, vertexPoint: null };
+      }
+      if (measureEdgeCache.referenceId !== referenceId) {
+        measureEdgeCache = {
+          referenceId,
+          segments: buildEdgeLinePositionsFromProxy(selectorRuntimeRef.current, reference)
+        };
+      }
+      return { edgeSegments: measureEdgeCache.segments, vertexPoint: null };
+    }
+
     function measureReferenceFromPosition(clientX, clientY, { hover = false, bypassTopology = false } = {}) {
       setPointerFromPosition(clientX, clientY);
       const modelIntersections = intersectVisibleModelMeshes();
@@ -1012,12 +1109,21 @@ export function useViewerPicking({
         .find(Boolean) || null;
       const referenceId = bypassTopology ? "" : (pickTopologyReference(modelIntersections, clientX, clientY, { hover }) || "");
       const reference = referenceId ? measureReferenceById(referenceId) : null;
-      return measurePickForPosition({
-        reference,
-        worldHitPoint,
-        referenceId,
-        bypassTopology
-      });
+      const { edgeSegments, vertexPoint } = bypassTopology
+        ? { edgeSegments: null, vertexPoint: null }
+        : measureSnapGeometry(reference, referenceId);
+      return {
+        pick: measurePickForPosition({
+          reference,
+          worldHitPoint,
+          referenceId,
+          bypassTopology,
+          edgeSegments,
+          vertexPoint,
+          modelOffset: measureModelOffsetFromRuntime(runtimeRef.current)
+        }),
+        referenceId
+      };
     }
 
     function pickReferenceAtPosition(clientX, clientY, { hover = false, preferTopology = false } = {}) {
@@ -1091,8 +1197,12 @@ export function useViewerPicking({
 
     function commitHoverState(referenceId) {
       const normalizedReferenceId = referenceId || "";
+      // Measuring keeps one cursor throughout. Swapping to the select pointer
+      // over a reference reads as "click to select this", when the click is
+      // going to drop a measurement point either way — what is snappable is
+      // shown by highlighting the entity, not by changing the cursor.
       const isMeasureMode = pickModeRef.current === VIEWER_PICK_MODE.MEASURE;
-      container.style.cursor = normalizedReferenceId ? "pointer" : (isMeasureMode ? "crosshair" : "");
+      container.style.cursor = isMeasureMode ? "crosshair" : (normalizedReferenceId ? "pointer" : "");
       if (hoverState.hoveredReferenceId === normalizedReferenceId) {
         return;
       }
@@ -1107,7 +1217,7 @@ export function useViewerPicking({
       }
       hoverState.lastX = NaN;
       hoverState.lastY = NaN;
-      container.style.cursor = "";
+      container.style.cursor = pickModeRef.current === VIEWER_PICK_MODE.MEASURE ? "crosshair" : "";
       const hadMeasureTick = hoverState.measureTickEmitted;
       hoverState.measureTickEmitted = false;
       if (!hoverState.hoveredReferenceId && !hadMeasureTick) {
@@ -1153,8 +1263,13 @@ export function useViewerPicking({
       hoverState.lastX = hoverState.x;
       hoverState.lastY = hoverState.y;
       if (pickModeRef.current === VIEWER_PICK_MODE.MEASURE) {
+        // The measure pass already raycast the model and resolved the topology
+        // reference under the cursor; picking again would double every hover.
         hoverState.measureTickEmitted = true;
-        onMeasureHoverPointRef.current?.(measureReferenceFromPosition(hoverState.x, hoverState.y, { hover: true }));
+        const measured = measureReferenceFromPosition(hoverState.x, hoverState.y, { hover: true });
+        onMeasureHoverPointRef.current?.(measured.pick);
+        commitHoverState(measured.referenceId || "");
+        return;
       }
       commitHoverState(pickReferenceAtPosition(hoverState.x, hoverState.y, { hover: true }));
     }
@@ -1425,7 +1540,7 @@ export function useViewerPicking({
       if (pickModeRef.current === VIEWER_PICK_MODE.MEASURE) {
         onMeasurePickRef.current?.(measureReferenceFromPosition(pointerDown.x, pointerDown.y, {
           bypassTopology: !!event.shiftKey
-        }));
+        }).pick);
         return;
       }
       const referenceId = pointerDownReferenceId || pickActivationReference(event.clientX, event.clientY, event.pointerType || "");

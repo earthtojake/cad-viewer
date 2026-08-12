@@ -97,6 +97,38 @@ test("markdown relative links resolve to files inside the app root", () => {
   );
 });
 
+test("markdown never names a path outside the app root", () => {
+  // Broader than the link check above: this also covers prose, inline code, and
+  // fenced blocks. Markdown under this directory may only refer to itself, so a
+  // `../` that climbs out is unaddressable in a standalone checkout, and a
+  // `viewer/`-prefixed path is the workbench spelling of an in-app path.
+  // \x60 is a backtick: escaping one inside String.raw would leave the
+  // backslash in place, and `\`` is an invalid escape in a unicode class.
+  const boundary = String.raw`(?:^|[\s\x60("'\[|])`;
+  const pathBody = String.raw`[A-Za-z0-9_.@/-]`;
+  const climbingPattern = new RegExp(`${boundary}((?:\\.\\./)+${pathBody}*)`, "gu");
+  const workbenchPrefixPattern = new RegExp(`${boundary}(viewer/${pathBody}+)`, "gu");
+  const offenders = [];
+  for (const filePath of collectFiles(appRoot, /\.md$/u)) {
+    const source = fs.readFileSync(filePath, "utf8");
+    const label = path.relative(appRoot, filePath);
+    for (const match of source.matchAll(climbingPattern)) {
+      const resolved = path.resolve(path.dirname(filePath), match[1]);
+      if (escapesAppRoot(resolved)) {
+        offenders.push(`${label} -> ${match[1]} (climbs out of the app root)`);
+      }
+    }
+    for (const match of source.matchAll(workbenchPrefixPattern)) {
+      offenders.push(`${label} -> ${match[1]} (drop the workbench "viewer/" prefix)`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `markdown under the viewer app root may only refer to itself:\n  ${offenders.join("\n  ")}`
+  );
+});
+
 test("package.json scripts never reach above the app root", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
   const offenders = Object.entries(packageJson.scripts || {})

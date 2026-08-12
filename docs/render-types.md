@@ -37,7 +37,7 @@ format. Pure data: no behaviour, no imports beyond the format enum.
 | `params` | `sidecar` (`.step.js`), `module` (in-`.implicit.js`), or `null`. |
 | `animations` | Has animation clips, so transport controls apply. |
 | `posePicker` | Robot pose picking. |
-| `artifactManaged` | Builds a package before it can render. A **subset** of `owns_entry` in `viewer/server_py/artifact.py`, not a mirror: the server also owns implicit entries (it builds their packages for export and snapshot) but an implicit raymarches live and must never wait on that build. A format listed here that the server does not own blocks forever. |
+| `artifactManaged` | Builds a package before it can render. A **subset** of `owns_entry` in `server_py/artifact.py`, not a mirror: the server also owns implicit entries (it builds their packages for export and snapshot) but an implicit raymarches live and must never wait on that build. A format listed here that the server does not own blocks forever. |
 | `exportFormats` | What `/__cad/export` can produce for it. |
 
 ### Rules

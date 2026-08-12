@@ -12,8 +12,8 @@ the model folder's ``__cadgen__/models/``, keyed by the entry filename:
 **Two payloads with different jobs.** ``drawing.dxf`` is the exchange artifact (exported,
 downloaded, re-imported); ``preview.glb`` is what the viewport renders. The GLB is not an
 optimization: with the 2D SVG view deleted, the 3D mesh is the ONLY DXF view, and baking it
-here is what lets the browser stop carrying ~1,800 lines of DXF parsing and extrusion
-(design/unified-glb-render-artifacts.md §7.4.2). It is built by a Node child of whichever
+here is what lets the browser stop carrying ~1,800 lines of DXF parsing and extrusion.
+It is built by a Node child of whichever
 process holds this package's generation lock, because the mesher is JS and is reused verbatim
 rather than reimplemented.
 

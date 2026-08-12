@@ -2,11 +2,51 @@ import { formatMeasurement } from "./measurement.js";
 import { dimensionEndpoints, measureDimensionSegments } from "./measureLines.js";
 import { projectWorldPointToClient } from "./measureRuler.js";
 
-// Draft state is amber so it can never be confused with the cyan of a committed
-// dimension.  Committed cyan is also distinct from the blue selection highlight.
+// Draft state is amber so it can never be confused with a committed dimension.
 export const MEASURE_DIMENSION_DRAFT_COLOR = "#f59e0b";
 export const MEASURE_DIMENSION_COMMITTED_COLOR = "#22d3ee";
-export const MEASURE_DIMENSION_FADED_ALPHA = 0.3;
+
+/**
+ * One colour per measurement, so a line in the viewport and its row in the panel
+ * identify each other without hovering either. Muted mid-tones rather than
+ * saturated ones: several are on screen at once over a shaded model, and they
+ * have to read in both the light and dark themes without competing with the
+ * selection blue or the amber draft.
+ */
+// Twelve hues at even 30 degree spacing, all at the same lightness and
+// saturation (HSL 45%/70%), so no measurement's colour shouts louder than
+// another's. The order is deliberately not the order around the wheel: colours
+// are handed out in sequence, so stepping by 150 degrees each time means two
+// measurements taken one after another — the pair most likely to be compared —
+// are never neighbouring hues.
+export const MEASURE_SERIES_COLORS = Object.freeze([
+  "#d59090",
+  "#90d5b2",
+  "#d590d5",
+  "#b2d590",
+  "#9090d5",
+  "#d5b290",
+  "#90d5d5",
+  "#d590b2",
+  "#90d590",
+  "#b290d5",
+  "#d5d590",
+  "#90b2d5"
+]);
+
+export function measureSeriesColor(index) {
+  const numeric = Number(index);
+  if (!Number.isFinite(numeric)) {
+    return MEASURE_SERIES_COLORS[0];
+  }
+  const wrapped = Math.trunc(numeric) % MEASURE_SERIES_COLORS.length;
+  return MEASURE_SERIES_COLORS[wrapped < 0 ? wrapped + MEASURE_SERIES_COLORS.length : wrapped];
+}
+// Inactive dimensions recede, but they still have to be identifiable by colour
+// against their row. The series palette is already muted, so the 0.3 that suited
+// one saturated cyan line washed the pastels out to nothing; the emphasis on the
+// active dimension now comes mostly from line weight and its label.
+export const MEASURE_DIMENSION_FADED_ALPHA = 0.7;
 export const MEASURE_DIMENSION_LABEL_BACKGROUND = "rgba(15, 23, 42, 0.92)";
 export const MEASURE_DIMENSION_LABEL_FONT =
   "600 8px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif";
@@ -20,9 +60,14 @@ export function measureLabelText(measurement, { precision = 2 } = {}) {
   if (!formatted) {
     return "";
   }
-  return measurement?.perpendicular !== null && measurement?.perpendicular !== undefined
-    ? `⟂ ${formatted}`
-    : formatted;
+  if (measurement?.perpendicular !== null && measurement?.perpendicular !== undefined) {
+    return `⟂ ${formatted}`;
+  }
+  // C-C is the standard shorthand for a centre-to-centre (hole spacing) reading.
+  if (measurement?.centerDistance !== null && measurement?.centerDistance !== undefined) {
+    return `C-C ${formatted}`;
+  }
+  return formatted;
 }
 
 /**
@@ -322,5 +367,109 @@ export function drawPulsingEndRing(context, point, {
   context.lineWidth = 2;
   context.strokeStyle = color;
   context.stroke();
+  context.restore();
+}
+
+export const MEASURE_SNAP_COLOR = "#f59e0b";
+export const MEASURE_SNAP_FREE_COLOR = "#94a3b8";
+
+/**
+ * Where the next click would actually land, and what it would bind to. Without
+ * this the tool gives no sign that a click is about to snap to an edge rather
+ * than to the surface under the cursor, and the two produce different numbers.
+ *
+ * The marker is shaped by snap kind rather than only coloured, so it survives
+ * both themes and reads without a legend: a square corner is a vertex, a ring is
+ * an edge, a hollow diamond is a face, and a bare cross is an unsnapped point on
+ * the mesh.
+ */
+export function drawMeasureSnapMarker(context, point, { snapKind = "free", now = null } = {}) {
+  if (!context || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    return;
+  }
+  const snapped = snapKind === "vertex" || snapKind === "edge" || snapKind === "face";
+  const color = snapped ? MEASURE_SNAP_COLOR : MEASURE_SNAP_FREE_COLOR;
+  const { x, y } = point;
+
+  context.save();
+  context.lineWidth = 1.6;
+  context.strokeStyle = color;
+  context.fillStyle = color;
+
+  // A crosshair under every marker keeps the exact point readable even where the
+  // marker sits against a busy edge.
+  context.globalAlpha = snapped ? 0.9 : 0.7;
+  context.beginPath();
+  context.moveTo(x - 7, y);
+  context.lineTo(x - 2.5, y);
+  context.moveTo(x + 2.5, y);
+  context.lineTo(x + 7, y);
+  context.moveTo(x, y - 7);
+  context.lineTo(x, y - 2.5);
+  context.moveTo(x, y + 2.5);
+  context.lineTo(x, y + 7);
+  context.stroke();
+
+  context.globalAlpha = 1;
+  if (snapKind === "vertex") {
+    context.beginPath();
+    context.rect(x - 3.5, y - 3.5, 7, 7);
+    context.fill();
+  } else if (snapKind === "edge") {
+    // Pulses so a snap that engages under a stationary cursor is still noticed.
+    const phase = Number.isFinite(now) ? (Math.sin((now / 500) * Math.PI) + 1) / 2 : 0.5;
+    context.beginPath();
+    context.arc(x, y, 3.6 + (phase * 0.8), 0, Math.PI * 2);
+    context.fill();
+  } else if (snapKind === "face") {
+    context.beginPath();
+    context.moveTo(x, y - 4.2);
+    context.lineTo(x + 4.2, y);
+    context.lineTo(x, y + 4.2);
+    context.lineTo(x - 4.2, y);
+    context.closePath();
+    context.stroke();
+  }
+  context.restore();
+}
+
+/**
+ * A short caption pinned beside the cursor. The docked panel already carries the
+ * same words, but it is across the viewport from where the user is looking.
+ */
+export function drawMeasureSnapChip(context, point, text, {
+  bounds = null,
+  color = MEASURE_SNAP_COLOR,
+  background = MEASURE_DIMENSION_LABEL_BACKGROUND,
+  labelColor = "#f8fafc"
+} = {}) {
+  if (!context || !point || !text) {
+    return;
+  }
+  context.save();
+  context.font = MEASURE_DIMENSION_LABEL_FONT;
+  const width = context.measureText(text).width + 14;
+  const height = 20;
+  let x = point.x + 14;
+  let y = point.y - height - 10;
+  if (bounds) {
+    x = Math.min(Math.max(x, 4), Math.max(4, bounds.width - width - 4));
+    y = Math.min(Math.max(y, 4), Math.max(4, bounds.height - height - 4));
+  }
+  context.beginPath();
+  if (typeof context.roundRect === "function") {
+    context.roundRect(x, y, width, height, 5);
+  } else {
+    context.rect(x, y, width, height);
+  }
+  context.fillStyle = background;
+  context.fill();
+  context.strokeStyle = color;
+  context.lineWidth = 1;
+  context.stroke();
+  context.fillStyle = labelColor;
+  context.textBaseline = "middle";
+  context.textAlign = "left";
+  context.fillText(text, x + 7, y + (height / 2));
   context.restore();
 }

@@ -4,9 +4,13 @@ import test from "node:test";
 import { PerspectiveCamera } from "three";
 
 import {
+  MEASURE_SERIES_COLORS,
   drawMeasureDimension,
+  drawMeasureSnapChip,
+  drawMeasureSnapMarker,
   drawPulsingEndRing,
   measureLabelText,
+  measureSeriesColor,
   screenDimensionLayout,
   screenSpaceDimensionLayout
 } from "./measureDimension.js";
@@ -187,4 +191,109 @@ test("drawPulsingEndRing tolerates missing context or point", () => {
   assert.doesNotThrow(() => drawPulsingEndRing(null, null));
   assert.doesNotThrow(() => drawPulsingEndRing(mockContext(), null));
   assert.doesNotThrow(() => drawPulsingEndRing(mockContext(), { x: 10, y: 10 }));
+});
+
+function recordingContext() {
+  const calls = [];
+  const record = (name) => (...args) => calls.push({ name, args });
+  return {
+    calls,
+    save: record("save"),
+    restore: record("restore"),
+    beginPath: record("beginPath"),
+    moveTo: record("moveTo"),
+    lineTo: record("lineTo"),
+    arc: record("arc"),
+    rect: record("rect"),
+    roundRect: record("roundRect"),
+    closePath: record("closePath"),
+    fill: record("fill"),
+    stroke: record("stroke"),
+    fillText: record("fillText"),
+    measureText: () => ({ width: 60 })
+  };
+}
+
+test("drawMeasureSnapMarker draws a distinct shape per snap kind", () => {
+  const shapeFor = (snapKind) => {
+    const context = recordingContext();
+    drawMeasureSnapMarker(context, { x: 50, y: 50 }, { snapKind, now: 0 });
+    return context.calls.map((call) => call.name);
+  };
+  // A vertex is a filled square, an edge a filled ring, a face a hollow diamond.
+  assert.ok(shapeFor("vertex").includes("rect"));
+  assert.ok(shapeFor("edge").includes("arc"));
+  assert.ok(shapeFor("face").includes("closePath"));
+  // An unsnapped point gets the crosshair only, so it cannot be mistaken for a snap.
+  const free = shapeFor("free");
+  assert.ok(!free.includes("arc") && !free.includes("rect") && !free.includes("closePath"));
+  assert.ok(free.includes("stroke"));
+});
+
+test("drawMeasureSnapMarker ignores unusable positions", () => {
+  const context = recordingContext();
+  drawMeasureSnapMarker(context, { x: NaN, y: 10 }, { snapKind: "edge" });
+  drawMeasureSnapMarker(context, null, { snapKind: "edge" });
+  assert.equal(context.calls.length, 0);
+});
+
+test("drawMeasureSnapChip keeps the caption inside the viewport", () => {
+  const context = recordingContext();
+  // Near the bottom-right corner the chip would otherwise be drawn off-screen.
+  drawMeasureSnapChip(context, { x: 795, y: 595 }, "Edge  L 25.13 mm", { bounds: { width: 800, height: 600 } });
+  const chip = context.calls.find((call) => call.name === "roundRect");
+  assert.ok(chip);
+  const [x, y, width, height] = chip.args;
+  assert.ok(x + width <= 800, "chip runs past the right edge");
+  assert.ok(y + height <= 600, "chip runs past the bottom edge");
+
+  const empty = recordingContext();
+  drawMeasureSnapChip(empty, { x: 10, y: 10 }, "", { bounds: { width: 800, height: 600 } });
+  assert.equal(empty.calls.length, 0);
+});
+
+test("measureSeriesColor cycles the palette and tolerates junk indices", () => {
+  assert.equal(measureSeriesColor(0), MEASURE_SERIES_COLORS[0]);
+  assert.equal(measureSeriesColor(3), MEASURE_SERIES_COLORS[3]);
+  // Wraps rather than running off the end, so the 9th measurement still has a colour.
+  assert.equal(measureSeriesColor(MEASURE_SERIES_COLORS.length), MEASURE_SERIES_COLORS[0]);
+  assert.equal(measureSeriesColor(MEASURE_SERIES_COLORS.length + 2), MEASURE_SERIES_COLORS[2]);
+  assert.equal(measureSeriesColor(-1), MEASURE_SERIES_COLORS[MEASURE_SERIES_COLORS.length - 1]);
+  assert.equal(measureSeriesColor(undefined), MEASURE_SERIES_COLORS[0]);
+  assert.equal(measureSeriesColor("nope"), MEASURE_SERIES_COLORS[0]);
+});
+
+test("the series palette stays muted enough to sit over a shaded model", () => {
+  for (const color of MEASURE_SERIES_COLORS) {
+    assert.match(color, /^#[0-9a-f]{6}$/, `${color} is not a 6-digit hex`);
+    const [r, g, b] = [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16));
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    // Mid-tone: bright enough on a dark theme, dark enough on a light one.
+    const lightness = (max + min) / 2 / 255;
+    assert.ok(lightness > 0.5 && lightness < 0.85, `${color} lightness ${lightness.toFixed(2)} out of range`);
+    // Pastel, not saturated: no channel may dominate the way a pure hue does.
+    assert.ok((max - min) / 255 < 0.45, `${color} is too saturated`);
+  }
+  assert.equal(new Set(MEASURE_SERIES_COLORS).size, MEASURE_SERIES_COLORS.length, "palette has duplicates");
+});
+
+test("consecutive series colours are far apart, not neighbouring hues", () => {
+  // Colours are handed out in sequence, so measurements taken one after another
+  // must not land on adjacent hues — that pair is the one most likely to be
+  // compared, in the viewport and in the panel.
+  const rgb = (color) => [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16));
+  let closest = Infinity;
+  for (let index = 0; index < MEASURE_SERIES_COLORS.length; index += 1) {
+    const a = rgb(MEASURE_SERIES_COLORS[index]);
+    const b = rgb(MEASURE_SERIES_COLORS[(index + 1) % MEASURE_SERIES_COLORS.length]);
+    closest = Math.min(closest, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+  }
+  assert.ok(closest > 80, `consecutive colours only ${closest.toFixed(0)} apart in RGB`);
+});
+
+test("the series palette is large enough to keep a full panel distinguishable", () => {
+  // The panel holds 20 measurements; the palette should cover most of a screen's
+  // worth before it repeats.
+  assert.ok(MEASURE_SERIES_COLORS.length >= 10, "palette is too small to tell measurements apart");
 });

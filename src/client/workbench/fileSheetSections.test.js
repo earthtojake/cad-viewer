@@ -56,6 +56,7 @@ test("rendered file sheet sections include closed-by-default sections", () => {
     "status",
     "tree",
     "reference",
+    "measurements",
     "parameters",
     "display"
   ]);

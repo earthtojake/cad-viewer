@@ -418,6 +418,11 @@ function buildReference({
       kind: row.kind || null,
       bbox: row.bbox || null,
       surfaceType: row.surfaceType || null,
+      curveType: row.curveType || null,
+      // Measured quantities the topology already computed exactly. Rigid
+      // occurrence transforms preserve both, so they pass through unchanged.
+      length: Number.isFinite(Number(row.length)) ? Number(row.length) : null,
+      area: Number.isFinite(Number(row.area)) ? Number(row.area) : null,
       center: row.center || null,
       normal: row.normal || null,
       params: row.params || null,

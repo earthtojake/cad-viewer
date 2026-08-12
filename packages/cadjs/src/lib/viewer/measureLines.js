@@ -1,15 +1,4 @@
-import { createScreenSpaceLineSegments } from "../../common/renderEdges.js";
 import { isFinitePoint, normalizeVector3 } from "./measurement.js";
-
-// Keep dimensions visually distinct from selection blue.  Amber also remains readable
-// against the neutral model material used by the viewer.
-export const MEASURE_LINE_COLOR = "#f59e0b";
-export const MEASURE_LINE_WIDTH = 2.4;
-export const MEASURE_LINE_OPACITY = 0.96;
-export const MEASURE_LINE_DRAFT_OPACITY = 0.72;
-export const MEASURE_LINE_DRAFT_WIDTH = 2;
-export const MEASURE_LINE_DRAFT_ID = "draft";
-export const MEASURE_LINE_RENDER_ORDER = 27;
 
 const MIN_DIMENSION_OFFSET = 0.75;
 const DIMENSION_OFFSET_RATIO = 0.12;
@@ -49,6 +38,13 @@ function cameraPoint(camera) {
     return null;
   }
   return [position.x, position.y, position.z];
+}
+
+function midpointOfPoints(a, b) {
+  if (!isFinitePoint(a) || !isFinitePoint(b)) {
+    return null;
+  }
+  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
 }
 
 function faceNormal(pick) {
@@ -124,144 +120,4 @@ export function measureDimensionSegments(pickA, pickB, measurement = null, { cam
       tick(witnessEnd)
     ]
   };
-}
-
-export function createMeasureLineSegments(runtime, state, { materials = null } = {}) {
-  if (!runtime?.THREE) {
-    return { committed: null, draft: null };
-  }
-  const segments = measureRulerLineSegments(state, { camera: runtime.camera });
-  const committedPoints = [];
-  const draftPoints = [];
-  for (const segment of segments) {
-    const target = segment.committed ? committedPoints : draftPoints;
-    for (const [start, end] of segment.segments) {
-      target.push(...start, ...end);
-    }
-  }
-  const options = {
-    color: MEASURE_LINE_COLOR,
-    // The construction is offset from the surface; retain depth testing so it
-    // cannot appear as an unrelated line through a solid.
-    depthTest: true,
-    depthWrite: false,
-    depthBias: 0.006,
-    renderOrder: MEASURE_LINE_RENDER_ORDER
-  };
-  return {
-    committed: committedPoints.length
-      ? createScreenSpaceLineSegments(runtime, committedPoints, {
-        ...options,
-        opacity: MEASURE_LINE_OPACITY,
-        lineWidth: MEASURE_LINE_WIDTH
-      }, materials)
-      : null,
-    draft: draftPoints.length
-      ? createScreenSpaceLineSegments(runtime, draftPoints, {
-        ...options,
-        opacity: MEASURE_LINE_DRAFT_OPACITY,
-        lineWidth: MEASURE_LINE_DRAFT_WIDTH
-      }, materials)
-      : null
-  };
-}
-
-export function clearMeasureLineGroup(runtime, group) {
-  if (!group) {
-    return;
-  }
-  while (group.children?.length) {
-    const child = group.children[0];
-    group.remove(child);
-    disposeMeasureLineChild(child);
-  }
-  group.visible = false;
-}
-
-function disposeMeasureLineChild(child) {
-  while (child.children?.length) {
-    const nested = child.children[0];
-    child.remove(nested);
-    disposeMeasureLineChild(nested);
-  }
-  if (typeof child.userData?.beforeDispose === "function") {
-    child.userData.beforeDispose(child);
-    delete child.userData.beforeDispose;
-  }
-  if (child.userData?.disposeGeometry !== false) {
-    child.geometry?.dispose?.();
-  }
-  if (child.userData?.disposeMaterial !== false) {
-    const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) {
-      material?.dispose?.();
-    }
-  }
-}
-
-export function measureRulerLineSegments(state, { camera = null } = {}) {
-  if (!state) {
-    return [];
-  }
-  const segments = [];
-  for (const item of state.measurements || []) {
-    const dimension = measureDimensionSegments(item?.pickA, item?.pickB, item?.measurement, { camera });
-    if (dimension) {
-      segments.push({ id: item.id, ...dimension, committed: true });
-    }
-  }
-  const draft = state.draft;
-  if (draft?.anchor && draft?.hover) {
-    const dimension = measureDimensionSegments(draft.anchor, draft.hover, null, { camera });
-    if (dimension) {
-      segments.push({ id: MEASURE_LINE_DRAFT_ID, ...dimension, committed: false });
-    }
-  }
-  return segments;
-}
-
-export function midpointOfPoints(a, b) {
-  if (!isFinitePoint(a) || !isFinitePoint(b)) {
-    return null;
-  }
-  return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
-}
-
-export function clampMeasureChipPosition(position, bounds, { width = 180, height = 44 } = {}) {
-  if (!position || !bounds || !(Number(bounds.width) > 0) || !(Number(bounds.height) > 0)) {
-    return null;
-  }
-  const viewportWidth = Number(bounds.width);
-  const viewportHeight = Number(bounds.height);
-  const halfWidth = Number(width) / 2;
-  const halfHeight = Number(height) / 2;
-  const minX = halfWidth;
-  const maxX = Math.max(minX, viewportWidth - halfWidth);
-  const minY = halfHeight;
-  const maxY = Math.max(minY, viewportHeight - halfHeight);
-  return {
-    x: Math.min(Math.max(Number(position.x) || 0, minX), maxX),
-    y: Math.min(Math.max(Number(position.y) || 0, minY), maxY)
-  };
-}
-
-export function layoutMeasureChipPositions(chips, bounds, { width = 188, height = 52, gap = 8 } = {}) {
-  const laidOut = [];
-  for (const chip of chips || []) {
-    let candidate = clampMeasureChipPosition(chip, bounds, { width, height });
-    if (!candidate) {
-      continue;
-    }
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const collides = laidOut.some((placed) => (
-        Math.abs(placed.x - candidate.x) < width && Math.abs(placed.y - candidate.y) < height
-      ));
-      if (!collides) {
-        break;
-      }
-      candidate = clampMeasureChipPosition({ x: candidate.x, y: candidate.y + height + gap }, bounds, { width, height });
-    }
-    laidOut.push({ ...chip, ...candidate });
-  }
-  return laidOut;
 }

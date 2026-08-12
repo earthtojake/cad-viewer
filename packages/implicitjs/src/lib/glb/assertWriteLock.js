@@ -15,8 +15,7 @@
  *
  * It throws UNCONDITIONALLY -- there is no `CADGEN_STRICT_LOCKS` escape hatch like the Python
  * side's. The Python check is old enough to have callers whose environments must degrade
- * rather than fail; this one is new, and new code fails loud
- * (design/unified-glb-render-artifacts.md §0.2, §4.4).
+ * rather than fail; this one is new, and new code fails loud.
  */
 
 import fs from "node:fs";

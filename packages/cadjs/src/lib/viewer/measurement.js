@@ -1,6 +1,25 @@
+// Measurement maths for the viewer's measure tool.
+//
+// This module is deliberately pure: it never reads the selector proxy and never
+// knows about scene transforms. Snap geometry arrives already resolved and
+// already in the same frame as the hit point, because only the viewer knows the
+// offset it applied to re-centre the model. A reference's own `pickData` is in
+// the model's untranslated frame, and it describes edges as `segmentStart` /
+// `segmentCount` offsets into a shared buffer rather than as points, so it can
+// never be snapped against directly.
+
 const PLANAR_SURFACE_TYPES = new Set(["plane", "planar"]);
 const PARALLEL_NORMAL_TOLERANCE = 0.999;
+// Below this the two planes are the same plane, not two planes with a gap.
+const COPLANAR_TOLERANCE = 1e-6;
 const EPSILON = 1e-9;
+
+export const MEASURE_SNAP_LABELS = {
+  vertex: "Vertex",
+  edge: "Edge",
+  face: "Face",
+  free: "Point"
+};
 
 export function normalizeVector3(value) {
   if (!Array.isArray(value) || value.length < 3) {
@@ -24,6 +43,24 @@ function pointVector(a, b) {
     return null;
   }
   return [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function dot3(a, b) {
+  return (a[0] * b[0]) + (a[1] * b[1]) + (a[2] * b[2]);
+}
+
+// `Number(null)` is 0 and `Number("")` is 0, so an absent quantity has to be
+// rejected before coercion — otherwise a face with no length reports length 0.
+function finiteNumber(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
 }
 
 export function isFinitePoint(value) {
@@ -61,11 +98,7 @@ export function closestPointOnSegment(point, start, end) {
   if (!relative) {
     return null;
   }
-  const t = clamp(
-    ((relative[0] * direction[0]) + (relative[1] * direction[1]) + (relative[2] * direction[2])) / lengthSquared,
-    0,
-    1
-  );
+  const t = clamp(dot3(relative, direction) / lengthSquared, 0, 1);
   return [
     start[0] + (direction[0] * t),
     start[1] + (direction[1] * t),
@@ -73,18 +106,31 @@ export function closestPointOnSegment(point, start, end) {
   ];
 }
 
-function clamp(value, min, max) {
-  return Math.min(Math.max(value, min), max);
+export function hasMeasurableSegments(segments) {
+  return (
+    (ArrayBuffer.isView(segments) || Array.isArray(segments)) &&
+    segments.length >= 6 &&
+    segments.length % 6 === 0
+  );
 }
 
-export function closestPointOnPolyline(points, point) {
-  if (!Array.isArray(points) || !Array.isArray(point)) {
+/**
+ * Closest point on a flat `[x1,y1,z1, x2,y2,z2, ...]` list of independent line
+ * segments — the layout the viewer's edge proxy uses. Consecutive segments are
+ * not assumed to share endpoints, so this is not a polyline walk.
+ */
+export function closestPointOnSegmentList(segments, point) {
+  if (!hasMeasurableSegments(segments) || !isFinitePoint(point)) {
     return null;
   }
   let bestPoint = null;
   let bestDistance = Infinity;
-  for (let index = 1; index < points.length; index += 1) {
-    const candidate = closestPointOnSegment(point, points[index - 1], points[index]);
+  for (let offset = 0; offset + 5 < segments.length; offset += 6) {
+    const candidate = closestPointOnSegment(
+      point,
+      [segments[offset], segments[offset + 1], segments[offset + 2]],
+      [segments[offset + 3], segments[offset + 4], segments[offset + 5]]
+    );
     if (!candidate) {
       continue;
     }
@@ -109,15 +155,145 @@ export function isPlanarFace(reference) {
   return normalizeVector3(pickData.normal) !== null;
 }
 
-export function classifyMeasurePick({ reference = null, hitPoint = null, referenceId = "" } = {}) {
+const ARC_FIT_TOLERANCE = 0.02;
+
+function cross3(a, b) {
+  return [
+    (a[1] * b[2]) - (a[2] * b[1]),
+    (a[2] * b[0]) - (a[0] * b[2]),
+    (a[0] * b[1]) - (a[1] * b[0])
+  ];
+}
+
+function segmentPoints(segments) {
+  const points = [];
+  for (let offset = 0; offset + 5 < segments.length; offset += 6) {
+    if (offset === 0) {
+      points.push([segments[0], segments[1], segments[2]]);
+    }
+    points.push([segments[offset + 3], segments[offset + 4], segments[offset + 5]]);
+  }
+  return points;
+}
+
+// The circumcentre of three points, which is the exact centre of the circle they
+// lie on. Using the centroid of the tessellation instead would only be right for
+// a full circle and would quietly mislocate every arc.
+function circumcentre(p1, p2, p3) {
+  const a = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+  const b = [p3[0] - p1[0], p3[1] - p1[1], p3[2] - p1[2]];
+  const normal = cross3(a, b);
+  const normalLengthSquared = dot3(normal, normal);
+  if (normalLengthSquared <= EPSILON) {
+    return null;
+  }
+  const bxn = cross3(b, normal);
+  const nxa = cross3(normal, a);
+  const aa = dot3(a, a);
+  const bb = dot3(b, b);
+  const scale = 1 / (2 * normalLengthSquared);
+  return [
+    p1[0] + (((aa * bxn[0]) + (bb * nxa[0])) * scale),
+    p1[1] + (((aa * bxn[1]) + (bb * nxa[1])) * scale),
+    p1[2] + (((aa * bxn[2]) + (bb * nxa[2])) * scale)
+  ];
+}
+
+/**
+ * What an edge actually is, read off its tessellation rather than off the
+ * artifact's own labels. The topology exporter reports edge `curveType` using
+ * the surface-type enum names (a circle comes through as "cylinder", a line as
+ * "plane") and ships no edge `params` at all, so radius and direction have to be
+ * recovered from the geometry to be trustworthy.
+ */
+export function edgeGeometryFromSegments(segments) {
+  if (!hasMeasurableSegments(segments)) {
+    return null;
+  }
+  const points = segmentPoints(segments);
+  if (points.length < 2) {
+    return null;
+  }
+  const firstDirection = normalizeVector3([
+    points[1][0] - points[0][0],
+    points[1][1] - points[0][1],
+    points[1][2] - points[0][2]
+  ]);
+  if (!firstDirection) {
+    return null;
+  }
+  const straight = points.every((point, index) => {
+    if (index === 0) {
+      return true;
+    }
+    const direction = normalizeVector3([
+      point[0] - points[index - 1][0],
+      point[1] - points[index - 1][1],
+      point[2] - points[index - 1][2]
+    ]);
+    return !direction || Math.abs(dot3(direction, firstDirection)) > PARALLEL_NORMAL_TOLERANCE;
+  });
+  if (straight) {
+    return { kind: "line", direction: firstDirection };
+  }
+  if (points.length < 3) {
+    return null;
+  }
+  // Sampled at thirds rather than at the ends: a closed circle's first and last
+  // tessellation points are the same point, which collapses the circumcircle.
+  const centre = circumcentre(
+    points[0],
+    points[Math.floor(points.length / 3)],
+    points[Math.floor((points.length * 2) / 3)]
+  ) || circumcentre(points[0], points[Math.floor(points.length / 2)], points[points.length - 1]);
+  if (!centre) {
+    return null;
+  }
+  const radii = points.map((point) => distanceBetweenPoints(centre, point)).filter((value) => value !== null);
+  if (!radii.length) {
+    return null;
+  }
+  const radius = radii.reduce((total, value) => total + value, 0) / radii.length;
+  if (!(radius > EPSILON)) {
+    return null;
+  }
+  const spread = Math.max(...radii) - Math.min(...radii);
+  if (spread / radius > ARC_FIT_TOLERANCE) {
+    return { kind: "curve" };
+  }
+  return { kind: "arc", radius, center: centre };
+}
+
+function straightEdgeDirection(pick) {
+  return pick?.geometry?.kind === "line" ? normalizeVector3(pick.geometry.direction) : null;
+}
+
+export function classifyMeasurePick({
+  reference = null,
+  hitPoint = null,
+  referenceId = "",
+  edgeSegments = null,
+  vertexPoint = null
+} = {}) {
   const normalizedHit = isFinitePoint(hitPoint) ? hitPoint.slice(0, 3) : null;
   const pickData = reference?.pickData || {};
   const selectorType = String(pickData.selectorType || reference?.selectorType || "").trim().toLowerCase();
-  const snapKind = classifyMeasureSnapKind({ pickData, selectorType, hitPoint: normalizedHit });
+  const snapKind = classifyMeasureSnapKind({
+    pickData,
+    selectorType,
+    hitPoint: normalizedHit,
+    edgeSegments,
+    vertexPoint
+  });
   if (!snapKind) {
     return null;
   }
-  const point = measurePointFromReference({ snapKind, reference, hitPoint: normalizedHit });
+  const point = measurePointFromReference({
+    snapKind,
+    hitPoint: normalizedHit,
+    edgeSegments,
+    vertexPoint
+  });
   if (!point) {
     return null;
   }
@@ -125,23 +301,26 @@ export function classifyMeasurePick({ reference = null, hitPoint = null, referen
     referenceId: String(referenceId || "").trim(),
     reference: reference || null,
     snapKind,
-    point
+    point,
+    geometry: snapKind === "edge" ? edgeGeometryFromSegments(edgeSegments) : null
   };
 }
 
-export function classifyMeasureSnapKind({ pickData = null, selectorType = "", hitPoint = null } = {}) {
+export function classifyMeasureSnapKind({
+  pickData = null,
+  selectorType = "",
+  hitPoint = null,
+  edgeSegments = null,
+  vertexPoint = null
+} = {}) {
   if (!pickData) {
     return isFinitePoint(hitPoint) ? "free" : null;
   }
   const normalizedSelectorType = String(pickData.selectorType || selectorType || "").trim().toLowerCase();
-  if (normalizedSelectorType === "vertex" && isFinitePoint(pickData.center)) {
+  if (normalizedSelectorType === "vertex" && isFinitePoint(vertexPoint)) {
     return "vertex";
   }
-  if (
-    Array.isArray(pickData.points) &&
-    pickData.points.length >= 2 &&
-    pickData.points.every((point) => isFinitePoint(point))
-  ) {
+  if (hasMeasurableSegments(edgeSegments) && isFinitePoint(hitPoint)) {
     return "edge";
   }
   if (normalizedSelectorType === "face") {
@@ -152,19 +331,19 @@ export function classifyMeasureSnapKind({ pickData = null, selectorType = "", hi
 
 export function measurePointFromReference({
   snapKind = "",
-  reference = null,
-  hitPoint = null
+  hitPoint = null,
+  edgeSegments = null,
+  vertexPoint = null
 } = {}) {
   const normalizedKind = String(snapKind || "").trim();
-  const pickData = reference?.pickData;
   if (normalizedKind === "vertex") {
-    return isFinitePoint(pickData?.center) ? pickData.center.slice(0, 3) : null;
+    return isFinitePoint(vertexPoint) ? vertexPoint.slice(0, 3) : null;
   }
   if (normalizedKind === "edge") {
     if (!isFinitePoint(hitPoint)) {
       return null;
     }
-    return closestPointOnPolyline(pickData?.points, hitPoint);
+    return closestPointOnSegmentList(edgeSegments, hitPoint);
   }
   if (normalizedKind === "face" || normalizedKind === "free") {
     return isFinitePoint(hitPoint) ? hitPoint.slice(0, 3) : null;
@@ -172,6 +351,13 @@ export function measurePointFromReference({
   return null;
 }
 
+/**
+ * The relationship between two picks, in the order a CAD measure tool reports
+ * it: a straight-line distance always, plus whichever of perpendicular distance
+ * or angle the pair actually admits. Parallel planes have a perpendicular
+ * distance and no meaningful angle; skew planes have an angle and no single
+ * distance between them, so only one of the two is ever set.
+ */
 export function measurementFromPicks(pickA, pickB) {
   const pointA = isFinitePoint(pickA?.point) ? pickA.point : null;
   const pointB = isFinitePoint(pickB?.point) ? pickB.point : null;
@@ -182,25 +368,42 @@ export function measurementFromPicks(pickA, pickB) {
   if (euclidean === null) {
     return null;
   }
-  const delta = [
-    pointB[0] - pointA[0],
-    pointB[1] - pointA[1],
-    pointB[2] - pointA[2]
-  ];
   const result = {
     euclidean,
     perpendicular: null,
-    delta,
+    centerDistance: null,
+    angleDeg: null,
+    delta: [pointB[0] - pointA[0], pointB[1] - pointA[1], pointB[2] - pointA[2]],
     unit: "mm"
   };
-  const perpendicular = perpendicularDistanceBetweenFaces(pickA, pickB);
-  if (perpendicular !== null) {
-    result.perpendicular = perpendicular < EPSILON ? 0 : perpendicular;
+  // Two circular edges are almost always two holes, and the number wanted there
+  // is the centre-to-centre spacing, not the gap between whichever points on the
+  // rims happened to be clicked.
+  if (pickA?.geometry?.kind === "arc" && pickB?.geometry?.kind === "arc") {
+    const centreDistance = distanceBetweenPoints(pickA.geometry.center, pickB.geometry.center);
+    if (centreDistance !== null) {
+      result.centerDistance = centreDistance < EPSILON ? 0 : centreDistance;
+    }
   }
+  const planar = planarPairMeasurement(pickA, pickB);
+  if (planar) {
+    if (planar.perpendicular !== null) {
+      result.perpendicular = planar.perpendicular < EPSILON ? 0 : planar.perpendicular;
+    }
+    result.angleDeg = planar.angleDeg;
+    return result;
+  }
+  result.angleDeg = straightEdgePairAngle(pickA, pickB);
   return result;
 }
 
-function perpendicularDistanceBetweenFaces(pickA, pickB) {
+// Both halves below insist the pick actually snapped to the entity they read.
+// A pick that fell back to "free" landed somewhere on the mesh that the
+// reference does not describe, so its plane or direction would be a fiction.
+function planarPairMeasurement(pickA, pickB) {
+  if (pickA?.snapKind !== "face" || pickB?.snapKind !== "face") {
+    return null;
+  }
   if (!isPlanarFace(pickA?.reference) || !isPlanarFace(pickB?.reference)) {
     return null;
   }
@@ -209,28 +412,155 @@ function perpendicularDistanceBetweenFaces(pickA, pickB) {
   if (!normalA || !normalB) {
     return null;
   }
-  const dot = (normalA[0] * normalB[0]) + (normalA[1] * normalB[1]) + (normalA[2] * normalB[2]);
-  if (Math.abs(dot) < PARALLEL_NORMAL_TOLERANCE) {
+  // Two points on the SAME face are not a face-to-face measurement. Their
+  // separation lies entirely in the plane, so the perpendicular distance is
+  // exactly zero — which would read as "0.00 mm" and collapse the dimension line
+  // to nothing. This is the commonest measurement there is, so it has to fall
+  // through to the straight distance between the points.
+  if (pickA.referenceId && pickA.referenceId === pickB.referenceId) {
     return null;
   }
-  const pointA = pickA.point;
-  const pointB = pickB.point;
-  const distance = Math.abs(
-    ((pointB[0] - pointA[0]) * normalA[0]) +
-    ((pointB[1] - pointA[1]) * normalA[1]) +
-    ((pointB[2] - pointA[2]) * normalA[2])
-  );
-  return distance;
+  const alignment = Math.abs(dot3(normalA, normalB));
+  if (alignment < PARALLEL_NORMAL_TOLERANCE) {
+    return { perpendicular: null, angleDeg: acuteAngleDegrees(alignment) };
+  }
+  const separation = pointVector(pickA.point, pickB.point);
+  if (!separation) {
+    return null;
+  }
+  const perpendicular = Math.abs(dot3(separation, normalA));
+  // Distinct but coplanar faces — two flats milled to the same height — have
+  // nothing between them to report either.
+  if (perpendicular <= COPLANAR_TOLERANCE) {
+    return null;
+  }
+  return { perpendicular, angleDeg: null };
+}
+
+function straightEdgePairAngle(pickA, pickB) {
+  if (pickA?.snapKind !== "edge" || pickB?.snapKind !== "edge") {
+    return null;
+  }
+  const directionA = straightEdgeDirection(pickA);
+  const directionB = straightEdgeDirection(pickB);
+  if (!directionA || !directionB) {
+    return null;
+  }
+  return acuteAngleDegrees(Math.abs(dot3(directionA, directionB)));
+}
+
+// Reported as the acute angle between the two entities (0-90°), which is the
+// number a chamfer or a draft angle is quoted as. Using the signed dot of the
+// outward normals instead would make a 45° chamfer read as 135°.
+function acuteAngleDegrees(alignment) {
+  return (Math.acos(clamp(alignment, -1, 1)) * 180) / Math.PI;
+}
+
+/**
+ * What a single selected entity is worth on its own — length, area, radius —
+ * taken from the exact values the topology computed rather than from the
+ * tessellation. This is the half of a CAD measure tool that answers "how big is
+ * this thing" before any second pick is made.
+ */
+export function entityMeasurementFromPick(pick) {
+  if (pick?.snapKind !== "edge" && pick?.snapKind !== "face") {
+    return null;
+  }
+  const reference = pick?.reference;
+  const pickData = reference?.pickData;
+  if (!pickData) {
+    return null;
+  }
+  const selectorType = String(pickData.selectorType || reference?.selectorType || "").trim().toLowerCase();
+  const params = pickData.params || {};
+  if (selectorType === "edge") {
+    const geometry = pick.geometry || null;
+    const radius = geometry?.kind === "arc" ? finiteNumber(geometry.radius) : null;
+    return compactEntity({
+      selectorType: "edge",
+      typeLabel: edgeTypeLabel(geometry),
+      length: finiteNumber(pickData.length),
+      radius,
+      diameter: radius === null ? null : radius * 2,
+      center: geometry?.kind === "arc" && isFinitePoint(geometry.center) ? geometry.center.slice(0, 3) : null
+    });
+  }
+  if (selectorType === "face") {
+    const surfaceType = String(pickData.surfaceType || "").trim().toLowerCase();
+    const radius = finiteNumber(params.radius);
+    return compactEntity({
+      selectorType: "face",
+      typeLabel: surfaceType || "face",
+      area: finiteNumber(pickData.area),
+      radius,
+      diameter: radius === null ? null : radius * 2,
+      center: isFinitePoint(params.center) ? params.center.slice(0, 3) : null
+    });
+  }
+  return null;
+}
+
+// The artifact's own edge labels are unreliable, so the name comes from the fit.
+function edgeTypeLabel(geometry) {
+  if (geometry?.kind === "line") {
+    return "line";
+  }
+  if (geometry?.kind === "arc") {
+    return "circle";
+  }
+  return "edge";
+}
+
+function compactEntity(entity) {
+  const compact = { unit: "mm" };
+  for (const [key, value] of Object.entries(entity)) {
+    if (value !== null && value !== undefined) {
+      compact[key] = value;
+    }
+  }
+  return compact.length !== undefined ||
+    compact.area !== undefined ||
+    compact.radius !== undefined ||
+    compact.majorRadius !== undefined
+    ? compact
+    : null;
+}
+
+function roundedPrecision(precision) {
+  return Number.isInteger(Number(precision)) ? Number(precision) : 2;
+}
+
+function firstFiniteQuantity(values) {
+  for (const value of values) {
+    const numeric = finiteNumber(value);
+    if (numeric !== null) {
+      return numeric;
+    }
+  }
+  return null;
 }
 
 export function formatMeasurement(measurement, { precision = 2 } = {}) {
   if (!measurement || !Number.isFinite(Number(measurement.euclidean))) {
     return "";
   }
-  const value = measurement.perpendicular !== null ? measurement.perpendicular : measurement.euclidean;
-  const normalizedPrecision = Number.isInteger(Number(precision)) ? Number(precision) : 2;
-  const formattedValue = value.toFixed(normalizedPrecision);
-  return `${formattedValue} ${measurement.unit || "mm"}`;
+  const value = firstFiniteQuantity([
+    measurement.perpendicular,
+    measurement.centerDistance,
+    measurement.euclidean
+  ]);
+  if (value === null) {
+    return "";
+  }
+  return `${value.toFixed(roundedPrecision(precision))} ${measurement.unit || "mm"}`;
+}
+
+export function formatMeasurementAngle(measurement, { precision = 1 } = {}) {
+  const angle = finiteNumber(measurement?.angleDeg);
+  if (angle === null) {
+    return "";
+  }
+  return `${angle.toFixed(roundedPrecision(precision))}°`;
 }
 
 export function formatMeasurementDelta(measurement, { precision = 2 } = {}) {
@@ -241,10 +571,31 @@ export function formatMeasurementDelta(measurement, { precision = 2 } = {}) {
   if (!values.every((component) => Number.isFinite(component))) {
     return "";
   }
-  const normalizedPrecision = Number.isInteger(Number(precision)) ? Number(precision) : 2;
+  const digits = roundedPrecision(precision);
   const formatComponent = (component) => {
-    const formatted = component.toFixed(normalizedPrecision);
-    return formatted === `-${(0).toFixed(normalizedPrecision)}` ? (0).toFixed(normalizedPrecision) : formatted;
+    const formatted = component.toFixed(digits);
+    return formatted === `-${(0).toFixed(digits)}` ? (0).toFixed(digits) : formatted;
   };
   return `ΔX ${formatComponent(values[0])}  ΔY ${formatComponent(values[1])}  ΔZ ${formatComponent(values[2])}`;
+}
+
+export function formatEntityMeasurement(entity, { precision = 2 } = {}) {
+  if (!entity) {
+    return "";
+  }
+  const digits = roundedPrecision(precision);
+  const unit = entity.unit || "mm";
+  const parts = [];
+  if (entity.diameter !== undefined) {
+    parts.push(`⌀ ${entity.diameter.toFixed(digits)} ${unit}`);
+  } else if (entity.majorRadius !== undefined) {
+    parts.push(`R ${entity.majorRadius.toFixed(digits)} / ${(entity.minorRadius ?? entity.majorRadius).toFixed(digits)} ${unit}`);
+  }
+  if (entity.length !== undefined) {
+    parts.push(`L ${entity.length.toFixed(digits)} ${unit}`);
+  }
+  if (entity.area !== undefined) {
+    parts.push(`A ${entity.area.toFixed(digits)} ${unit}²`);
+  }
+  return parts.join("  ");
 }
