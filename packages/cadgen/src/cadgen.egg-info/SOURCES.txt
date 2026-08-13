@@ -54,6 +54,7 @@ src/cadgen/_internal/glb.py
 src/cadgen/_internal/glb_mesh_payload.py
 src/cadgen/_internal/glb_topology.py
 src/cadgen/_internal/implicit_package.py
+src/cadgen/_internal/legacy_artifacts.py
 src/cadgen/_internal/node_resolve_hooks.mjs
 src/cadgen/_internal/node_resolve_register.mjs
 src/cadgen/_internal/node_runtime.py

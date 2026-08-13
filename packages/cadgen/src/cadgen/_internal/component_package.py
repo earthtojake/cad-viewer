@@ -25,7 +25,7 @@ from cadgen._internal.generation import (
     DEFAULT_MESH_TOLERANCE,
 )
 from cadgen._internal.glb import export_assembly_glb_from_scene
-from cadgen._internal.package_freshness import ASSEMBLY_PACKAGE_SCHEMA_VERSION
+from cadgen._internal.package_freshness import STEP_PACKAGE_VERSION
 from cadgen.coordination import (
     PHASE_COMPONENTS,
     PHASE_FINALIZE,
@@ -40,14 +40,13 @@ from cadgen._internal.step_scene import (
 )
 
 PACKAGE_KIND = "assembly-package"
-# Descriptor (assembly.json) layout version, independent of STEP_TOPOLOGY_SCHEMA_VERSION
-# (which versions each component GLB's embedded topology). Bumped to 2 for the unified
-# part+assembly rearchitecture: one descriptor+components representation, durable
-# ``entryKind``, clean content-addressed components, and per-folder ``__cadgen__`` refs.
-# The number itself lives in the stdlib-only _internal.package_freshness so BOTH freshness
-# authorities gate on one constant -- the viewer's validator cannot import this module
-# (it pulls in the CAD runtime), and a second hand-copied number is how the two drift.
-PACKAGE_SCHEMA_VERSION = ASSEMBLY_PACKAGE_SCHEMA_VERSION
+# The single version for a STEP package: descriptor layout plus the bytes inside the
+# component GLBs it references. Defined in the stdlib-only _internal.package_freshness so
+# BOTH freshness authorities gate on one constant -- the viewer's validator cannot import
+# this module (it pulls in the CAD runtime), and a second hand-copied number is how the two
+# drift. It also salts the component cid below, which is what makes a payload change
+# actually re-emit rather than be reused by geometry.
+PACKAGE_SCHEMA_VERSION = STEP_PACKAGE_VERSION
 # Self-contained content-addressed packages: each model's components live INSIDE its own package
 # at <folder>/__cadgen__/models/<step-filename>/components/<geomHash>.glb, referenced by the
 # descriptor via the flat relative ref components/<geomHash>.glb. Within-model dedup (repeated
@@ -133,6 +132,14 @@ def _content_hash_and_bytes(shape: Any) -> tuple[str, bytes]:
     """The content hash AND the location-stripped BREP bytes it digests, from a
     single serialization.
 
+    The digest is salted with :data:`STEP_PACKAGE_VERSION` because the cid
+    addresses a BUILT component GLB, not the geometry alone. Each GLB embeds the
+    topology tables the extractor produced, so a change to what the extractor
+    emits makes every cached component wrong while its geometry — and therefore
+    an unsalted digest — is unchanged. The build reuses any ``<cid>.glb`` already
+    on disk, so without the salt an extractor fix would leave every existing
+    package serving the old tables behind a descriptor that claims to be current.
+
     Two occurrences of the same part share an underlying ``TShape`` (``.moved()``
     only swaps the location), so stripping the location and serializing yields an
     identical digest for every repeat — the content-addressing that dedups the
@@ -145,7 +152,11 @@ def _content_hash_and_bytes(shape: Any) -> tuple[str, bytes]:
     worker-build payload, so returning both avoids serializing each missing
     component's BREP twice (once to hash, once for the payload)."""
     brep = _shape_brep_bytes(shape)
-    return hashlib.sha256(brep).hexdigest(), brep
+    digest = hashlib.sha256()
+    digest.update(str(STEP_PACKAGE_VERSION).encode("utf-8"))
+    digest.update(b"\x00")
+    digest.update(brep)
+    return digest.hexdigest(), brep
 
 
 def _content_hash_shape(shape: Any) -> str:

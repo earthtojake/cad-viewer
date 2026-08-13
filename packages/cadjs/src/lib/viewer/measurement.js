@@ -273,6 +273,9 @@ export function classifyMeasurePick({
   hitPoint = null,
   referenceId = "",
   edgeSegments = null,
+  // The fit only depends on the segments, so a caller hovering the same edge
+  // frame after frame can hand back the previous result instead of refitting.
+  edgeGeometry,
   vertexPoint = null
 } = {}) {
   const normalizedHit = isFinitePoint(hitPoint) ? hitPoint.slice(0, 3) : null;
@@ -302,7 +305,9 @@ export function classifyMeasurePick({
     reference: reference || null,
     snapKind,
     point,
-    geometry: snapKind === "edge" ? edgeGeometryFromSegments(edgeSegments) : null
+    geometry: snapKind === "edge"
+      ? (edgeGeometry === undefined ? edgeGeometryFromSegments(edgeSegments) : edgeGeometry)
+      : null
   };
 }
 

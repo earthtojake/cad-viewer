@@ -615,31 +615,6 @@ export function createReferenceFaceFillGeometry(THREE, reference) {
   return geometry;
 }
 
-export function buildEdgePickObjects(THREE, group, references) {
-  const objects = [];
-  for (const reference of Array.isArray(references) ? references : []) {
-    const points = reference?.pickData?.points;
-    if (!Array.isArray(points) || points.length < 2) {
-      continue;
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(points.flat()), 3));
-    const material = new THREE.LineBasicMaterial({
-      color: 0xffffff,
-      transparent: true,
-      opacity: 0
-    });
-    const line = new THREE.Line(geometry, material);
-    line.userData.referenceId = String(reference?.id || "");
-    line.userData.partId = String(reference?.partId || "");
-    line.userData.metric = reference?.pickData?.metric ?? Infinity;
-    group.add(line);
-    objects.push(line);
-  }
-  group.updateMatrixWorld(true);
-  return objects;
-}
-
 export function buildVertexMarkerMesh(runtime, THREE, reference, {
   color,
   opacity,

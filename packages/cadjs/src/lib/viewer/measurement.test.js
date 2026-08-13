@@ -556,3 +556,28 @@ test("genuinely separated parallel faces still report perpendicular distance", (
   assert.equal(result.perpendicular, 20);
   assert.equal(formatMeasurement(result), "20.00 mm");
 });
+
+test("classifyMeasurePick accepts a precomputed edge fit and derives one otherwise", () => {
+  const reference = { id: "e1", selectorType: "edge", pickData: { selectorType: "edge" } };
+  const segments = [0, 0, 0, 4, 0, 0];
+
+  // Omitted: derived from the segments, so the fit always matches what was snapped.
+  assert.deepEqual(
+    classifyMeasurePick({ reference, hitPoint: [2, 1, 0], edgeSegments: segments }).geometry,
+    { kind: "line", direction: [1, 0, 0] }
+  );
+
+  // Supplied: reused as-is, which is what lets a caller hovering one edge frame
+  // after frame skip refitting it every tick.
+  const precomputed = { kind: "arc", radius: 9, center: [1, 2, 3] };
+  assert.equal(
+    classifyMeasurePick({ reference, hitPoint: [2, 1, 0], edgeSegments: segments, edgeGeometry: precomputed }).geometry,
+    precomputed
+  );
+
+  // An explicit null means "this edge has no usable fit", not "derive one".
+  assert.equal(
+    classifyMeasurePick({ reference, hitPoint: [2, 1, 0], edgeSegments: segments, edgeGeometry: null }).geometry,
+    null
+  );
+});

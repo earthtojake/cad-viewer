@@ -64,7 +64,11 @@ DRAWING_PACKAGE_KIND = "drawing-package"
 # v6: geometry.json grew text markings, the layer summary (colors, kinds), and the source
 # units scale (dxf-geometry/2), and the parser now honors $INSUNITS — an inch-unit package
 # built before v6 is both missing overlays and 25.4x too small.
-DRAWING_PACKAGE_SCHEMA_VERSION = 6
+#
+# Named for the file format, not for "drawings": a second 2D format would parse and bake
+# differently, so it gets its own cache key rather than sharing this one and forcing every
+# DXF package to rebuild whenever it changes.
+DXF_PACKAGE_SCHEMA_VERSION = 6
 DRAWING_DESCRIPTOR_NAME = "drawing.json"
 DRAWING_PREVIEW_NAME = "preview.glb"
 
@@ -309,7 +313,7 @@ def write_drawing_package(
     )
     descriptor: dict[str, object] = {
         "kind": DRAWING_PACKAGE_KIND,
-        "packageSchemaVersion": DRAWING_PACKAGE_SCHEMA_VERSION,
+        "packageSchemaVersion": DXF_PACKAGE_SCHEMA_VERSION,
         "sourceKind": "python",
         # Like the assembly package, sourcePath/sourceClosureFiles are relative to the
         # MODEL folder (the directory holding the .dxf.py), not the __cadgen__ dir.
@@ -352,7 +356,7 @@ def write_imported_drawing_package(
     )
     descriptor: dict[str, object] = {
         "kind": DRAWING_PACKAGE_KIND,
-        "packageSchemaVersion": DRAWING_PACKAGE_SCHEMA_VERSION,
+        "packageSchemaVersion": DXF_PACKAGE_SCHEMA_VERSION,
         "sourceKind": "dxf",
         "sourcePath": resolved_dxf.name,
         # The imported digest the spec table names (`source_digest_field`). Fails closed:
@@ -447,7 +451,7 @@ def drawing_package_current(source_path: Path) -> bool:
     descriptor = load_drawing_descriptor(package_dir)
     if descriptor is None:
         return False
-    if not schema_version_matches(descriptor, DRAWING_PACKAGE_SCHEMA_VERSION):
+    if not schema_version_matches(descriptor, DXF_PACKAGE_SCHEMA_VERSION):
         return False
     # The preview settings this build froze into preview.glb. No other signal can see a
     # change to them, so without this a thickness edit would leave every built package

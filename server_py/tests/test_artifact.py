@@ -27,7 +27,7 @@ from server_py import artifact, scanner  # noqa: E402
 
 from cadgen._internal import drawing_package as _drawing_package  # noqa: E402
 from cadgen._internal.drawing_package import (  # noqa: E402
-    DRAWING_PACKAGE_SCHEMA_VERSION,
+    DXF_PACKAGE_SCHEMA_VERSION,
     drawing_preview_bake_settings,
 )
 from cadgen._internal import implicit_package as _implicit_package  # noqa: E402
@@ -36,11 +36,11 @@ from cadgen._internal.implicit_package import (  # noqa: E402
     implicit_bake_settings,
 )
 from cadgen._internal.package_freshness import (  # noqa: E402
-    ASSEMBLY_PACKAGE_SCHEMA_VERSION as _STEP_SCHEMA_VERSION,
+    STEP_PACKAGE_VERSION as _STEP_SCHEMA_VERSION,
     canonical_bake_hash,
 )
 
-_DXF_SCHEMA_VERSION = DRAWING_PACKAGE_SCHEMA_VERSION
+_DXF_SCHEMA_VERSION = DXF_PACKAGE_SCHEMA_VERSION
 _IMPLICIT_SCHEMA_VERSION = IMPLICIT_PACKAGE_SCHEMA_VERSION
 
 # Sentinel for "write no such key at all", distinct from "write an empty one".

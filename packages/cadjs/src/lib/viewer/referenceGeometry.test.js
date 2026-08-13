@@ -3,7 +3,6 @@ import { test } from "node:test";
 import * as THREE from "three";
 import {
   buildEdgeLinePositionsFromProxy,
-  buildEdgePickObjects,
   buildFallbackFaceFanGeometry,
   buildFaceBoundaryLinePositions,
   buildFaceFillGeometryFromDisplayMeshes,
@@ -178,40 +177,6 @@ test("reference face fill geometry triangulates planar loops", () => {
   }), null);
 });
 
-test("reference edge pick objects create invisible pick lines with reference metadata", () => {
-  const group = new THREE.Group();
-  const objects = buildEdgePickObjects(THREE, group, [
-    {
-      id: "edge:part-a:1",
-      partId: "part-a",
-      pickData: {
-        metric: 0.25,
-        points: [[0, 0, 0], [1, 0, 0]]
-      }
-    },
-    {
-      id: "edge:part-a:skip",
-      partId: "part-a",
-      pickData: {
-        points: [[0, 0, 0]]
-      }
-    }
-  ]);
-
-  assert.equal(objects.length, 1);
-  assert.equal(group.children.length, 1);
-  assert.equal(group.children[0], objects[0]);
-  assert.equal(objects[0].type, "Line");
-  assert.equal(objects[0].material.transparent, true);
-  assert.equal(objects[0].material.opacity, 0);
-  assert.equal(objects[0].userData.referenceId, "edge:part-a:1");
-  assert.equal(objects[0].userData.partId, "part-a");
-  assert.equal(objects[0].userData.metric, 0.25);
-  assertArrayNear(geometryPositions(objects[0].geometry), [
-    0, 0, 0,
-    1, 0, 0
-  ], "pick line");
-});
 
 test("reference proxy helpers build face fill and edge line buffers from selector data", () => {
   const runtime = createRuntime();

@@ -189,3 +189,87 @@ test("flat stats report net area and bounding size", () => {
   // Tolerance covers the circle's polygonal sampling (the hole is a sampled polygon).
   assert.ok(Math.abs(stats.areaMm2 - expected) < 12, `net area ~${expected}, got ${stats.areaMm2}`);
 });
+
+// A flat pattern whose bend lines are inert crease marks must not be judged by the
+// X-slab strip decomposition. That decomposition collapses each bend to the midpoint X
+// of its endpoints, so a bend that is not vertical, or not full-length, became a phantom
+// full-height boundary in the middle of the part -- and any hole straddling that phantom X
+// was rejected as "crossing bend lines" from tens of millimetres away. The orientation
+// guard missed it because it returns early at angle 0, which is the default: a crease mark
+// skipped the guard and then drove the orientation-sensitive decomposition anyway.
+function creasedPlate(bendStart, bendEnd, holeRect) {
+  return {
+    geometry: {
+      lines: [
+        ...rectangle(0, 0, 100, 60),
+        { kind: "bend", start: bendStart, end: bendEnd },
+        ...rectangle(...holeRect)
+      ],
+      arcs: [],
+      circles: []
+    },
+    defaultThicknessMm: 2
+  };
+}
+
+const FOLDING = [{ direction: "up", angleDeg: 90 }];
+
+test("a horizontal crease mark does not reject a hole tens of mm away from it", () => {
+  // The reported false positive: bend along y=5, hole 25 mm above it, straddling the
+  // midpoint x=50 that the bend collapses to.
+  const dxfData = creasedPlate([10, 5], [90, 5], [40, 30, 60, 45]);
+  const meshData = buildDxfPreviewMeshData(dxfData, 2);
+  assert.ok(meshData.triangle_count > 0, "the flat pattern must still build");
+  assert.equal(meshData.guide_line_segments.length, 6, "the crease mark must still draw");
+});
+
+test("moving that hole clear of the phantom boundary changed nothing before, and still does not", () => {
+  // A and B in the report differ only in the hole's X. Both must build: the geometry is
+  // identical in every way that matters, so the outcome must not depend on the slab math.
+  const straddling = creasedPlate([10, 5], [90, 5], [40, 30, 60, 45]);
+  const clear = creasedPlate([10, 5], [90, 5], [65, 30, 85, 45]);
+  assert.ok(buildDxfPreviewMeshData(straddling, 2).triangle_count > 0);
+  assert.ok(buildDxfPreviewMeshData(clear, 2).triangle_count > 0);
+});
+
+test("a partial-length vertical crease mark does not reject a hole either", () => {
+  // The real-world shape: bend lines that are perpendicular to each other and both
+  // partial-length, silently extended to full height by the decomposition.
+  const dxfData = creasedPlate([50, 20], [50, 40], [40, 45, 60, 55]);
+  assert.ok(buildDxfPreviewMeshData(dxfData, 2).triangle_count > 0);
+});
+
+test("a hole genuinely crossing an ACTIVE bend is still rejected", () => {
+  const dxfData = creasedPlate([50, 0], [50, 60], [40, 30, 60, 45]);
+  assert.throws(
+    () => buildDxfPreviewMeshData(dxfData, 2, FOLDING),
+    /holes crossing bend/,
+    "folding a sheet through a hole is still unsupported"
+  );
+});
+
+test("an ACTIVE bend clear of every hole still folds", () => {
+  const dxfData = creasedPlate([50, 0], [50, 60], [65, 30, 85, 45]);
+  const meshData = buildDxfPreviewMeshData(dxfData, 2, FOLDING);
+  assert.ok(meshData.triangle_count > 0);
+});
+
+test("an ACTIVE non-vertical bend reports its orientation, not a false hole claim", () => {
+  // The decomposition genuinely cannot fold this. It now says so, instead of blaming
+  // whichever hole happened to straddle the collapsed midpoint.
+  const dxfData = creasedPlate([10, 5], [90, 5], [40, 30, 60, 45]);
+  assert.throws(
+    () => buildDxfPreviewMeshData(dxfData, 2, FOLDING),
+    /requires vertical bend lines/
+  );
+});
+
+test("the baked artifact preview never folds, so it never reaches the strip decomposition", () => {
+  // buildDxfPreviewGlb bakes with null bend settings and DEFAULT_DXF_BEND_ANGLE_DEG is 0.
+  // Folding is a render-time parameter the viewer applies live. This is why the CLI could
+  // not have been rescued by catching the preview error and retrying flat: flat is already
+  // the only path it takes.
+  const dxfData = creasedPlate([50, 0], [50, 60], [40, 30, 60, 45]);
+  assert.ok(buildDxfPreviewMeshData(dxfData, 2, null).triangle_count > 0);
+  assert.throws(() => buildDxfPreviewMeshData(dxfData, 2, FOLDING), /holes crossing bend/);
+});

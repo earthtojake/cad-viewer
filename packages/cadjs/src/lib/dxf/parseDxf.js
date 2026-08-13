@@ -1,4 +1,3 @@
-const DXF_RENDER_SCHEMA_VERSION = 1;
 /** How deep an INSERT chain may nest before we call it a cycle. */
 const MAX_BLOCK_NESTING = 16;
 const ANGLE_EPSILON = 1e-9;
@@ -1178,7 +1177,6 @@ export function parseDxf(dxfText, { fileRef = "", sourceUrl = "" } = {}) {
   }
 
   return {
-    schemaVersion: DXF_RENDER_SCHEMA_VERSION,
     fileRef,
     sourceUrl,
     sourceUnits: header.sourceUnits,

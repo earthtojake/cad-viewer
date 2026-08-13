@@ -20,6 +20,7 @@ from cadgen._internal.glb_mesh_payload import (
     scene_glb_mesh_payload_key,
 )
 from cadgen._internal.glb_topology import (
+    GLB_VERSION,
     STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
     STEP_EDGE_CLASS_ATTRIBUTE,
     STEP_EDGE_SURFACE_CLASS_CODES,
@@ -40,7 +41,6 @@ UNSIGNED_INT = 5125
 TRIANGLES = 4
 STEP_TOPOLOGY_LEGACY_IDENTITY_KEYS = frozenset({"cadRef", "cadPath"})
 GLB_MAGIC = 0x46546C67
-GLB_VERSION = 2
 IDENTITY_TRANSFORM = (
     1.0, 0.0, 0.0, 0.0,
     0.0, 1.0, 0.0, 0.0,

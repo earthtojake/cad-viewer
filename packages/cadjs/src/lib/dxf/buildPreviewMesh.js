@@ -1303,7 +1303,18 @@ export function buildDxfPreviewMeshData(dxfData, thicknessMm, bendSettings = nul
   let bendTransforms;
   let guideLineSegments;
   let transforms;
-  if (bendLines.length) {
+  // Only a bend that actually FOLDS needs the strip decomposition, which is what the
+  // comment on validateActiveBendLines has always claimed. The decomposition slices the
+  // part into vertical X-slabs at each bend's midpoint X, so a bend line that is not
+  // vertical, or not full-length, becomes a phantom full-height boundary in the middle of
+  // the part — and any hole straddling that phantom X was rejected as "crossing bend
+  // lines" from tens of millimetres away. The orientation guard did not catch it because
+  // it returns early at angle 0, which is the default: an inert crease mark skipped the
+  // guard and then drove the orientation-sensitive decomposition anyway.
+  const hasFoldingBend = bendLines.some(
+    (_, index) => normalizeDxfBendAngleDeg(normalizedBendSettings?.[index]?.angleDeg, 0) !== 0
+  );
+  if (bendLines.length && hasFoldingBend) {
     const outerBounds = loopBounds(outerLoop);
     const bendProfiles = buildBendProfiles(outerBounds, bendLines, normalizedBendSettings, halfThickness, {
       insideRadiusMm: options?.bendInsideRadiusMm,
@@ -1315,7 +1326,16 @@ export function buildDxfPreviewMeshData(dxfData, thicknessMm, bendSettings = nul
     strips = buildFlatStripDefinitions(loops);
     transforms = [new Matrix4().identity()];
     bendTransforms = [];
-    guideLineSegments = [];
+    // Crease marks still draw, at their REAL endpoints. Emitting the flat plate without
+    // them (as one reading of "skip the decomposition" would) would silently drop the bend
+    // lines from every flat pattern that has them, which is the whole point of the layer.
+    // Unfolded, the guides need no transform, so this is what buildSegmentTransforms
+    // produces for the first bend with an identity base matrix.
+    const guideY = guideElevationSign * (halfThickness + BEND_LINE_ELEVATION_MM);
+    guideLineSegments = bendLines.flatMap((bendLine) => [
+      bendLine.start[0], guideY, bendLine.start[1],
+      bendLine.end[0], guideY, bendLine.end[1]
+    ]);
   }
 
   const triangleVertices = [];

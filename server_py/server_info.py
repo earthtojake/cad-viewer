@@ -9,7 +9,6 @@ import os
 
 from .paths import filesystem_path_from_url_path
 
-VIEWER_SERVER_INFO_SCHEMA_VERSION = 1
 VIEWER_SERVER_APP_ID = "cad-viewer"
 DEFAULT_VIEWER_HOST = "127.0.0.1"
 DEFAULT_VIEWER_PORT = 3245
@@ -51,7 +50,6 @@ def build_viewer_server_info(
     normalized_port = normalize_viewer_port(port)
     normalized_mode = str(server_mode or "").strip()
     info = {
-        "schemaVersion": VIEWER_SERVER_INFO_SCHEMA_VERSION,
         "app": VIEWER_SERVER_APP_ID,
         "viewerVersion": str(viewer_version or ""),
     }

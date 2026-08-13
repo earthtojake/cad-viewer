@@ -199,7 +199,6 @@ function transformPickData(pickData, transform) {
     center: Array.isArray(pickData.center) ? transformPoint(transform, pickData.center) : pickData.center,
     normal: Array.isArray(pickData.normal) ? transformVector(transform, pickData.normal) : pickData.normal,
     params: pickData.params ? transformParams(transform, pickData.params) : pickData.params,
-    points: transformPointList(transform, pickData.points),
     loops: Array.isArray(pickData.loops)
       ? pickData.loops.map((loop) => transformPointList(transform, loop))
       : pickData.loops,

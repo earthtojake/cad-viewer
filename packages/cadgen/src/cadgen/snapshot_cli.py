@@ -326,7 +326,9 @@ def parse_snapshot_args(argv: Sequence[str]) -> SnapshotOptions:
             index += 1
         elif arg.startswith("--job="):
             options.job = arg[len("--job=") :]
-        elif arg == "--input":
+        elif arg in {"--input", "-i"}:
+            # `-i` is advertised in the help beside `-o`, so it has to parse. It did not,
+            # which made the documented spelling of the CLI's most-used flag an error.
             options.input = parse_required_value(argv, index, arg)
             index += 1
         elif arg.startswith("--input="):
