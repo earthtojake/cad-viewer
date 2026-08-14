@@ -2,7 +2,7 @@
   "name": "cad-viewer",
   "private": true,
   "type": "module",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "scripts": {
     "dev": "vite dev",
     "start": "node scripts/start-viewer.mjs",

@@ -118,6 +118,51 @@ export function buildFaceFillGeometryFromDisplayMeshes(runtime, THREE, reference
   return geometry;
 }
 
+/** The display record a reference belongs to, by longest matching part id.
+ *
+ * Same matching rule the selector transforms use: a record's ``partId`` either IS the
+ * reference's occurrence id or is one of its ancestors (``o1`` owns ``o1.3``), and the most
+ * specific owner wins. Returns null for a reference nothing on screen claims. */
+export function displayRecordForReference(runtime, reference) {
+  const occurrenceId = String(reference?.occurrenceId || reference?.pickData?.occurrenceId || "").trim();
+  if (!occurrenceId || !Array.isArray(runtime?.displayRecords)) {
+    return null;
+  }
+  let best = null;
+  let bestLength = -1;
+  for (const record of runtime.displayRecords) {
+    const partId = String(record?.partId || "").trim();
+    if (!partId || partId === "__model__") {
+      continue;
+    }
+    if (occurrenceId !== partId && !occurrenceId.startsWith(`${partId}.`)) {
+      continue;
+    }
+    if (partId.length > bestLength) {
+      best = record;
+      bestLength = partId.length;
+    }
+  }
+  return best;
+}
+
+/** The exploded-view offset applied to a reference's part, or null when it has none.
+ *
+ * Selector geometry is world-at-REST: the exploded view moves the display mesh through
+ * ``record.explodedViewMatrix`` and never touches the pick proxy, so a highlight sliced out of
+ * that proxy needs this matrix to sit on the part the user is actually pointing at. Face fills
+ * do not: they are rebuilt from the live display meshes, whose matrices already carry it.
+ *
+ * Deliberately NOT ``composeDisplayRecordEffectMatrix``: a parameter effect is already baked
+ * into the transformed selector runtime the highlight reads, and applying it twice would send
+ * the highlight to double the displacement. The exploded offset is the part no runtime carries.
+ */
+export function referenceExplodedViewMatrix(runtime, reference) {
+  const record = displayRecordForReference(runtime, reference);
+  const matrix = record?.explodedViewMatrix;
+  return matrix?.elements?.length === 16 ? matrix : null;
+}
+
 export function buildEdgeLinePositionsFromProxy(selectorRuntime, reference) {
   const proxy = selectorRuntime?.proxy || {};
   const segmentStart = Number(reference?.pickData?.segmentStart || 0);

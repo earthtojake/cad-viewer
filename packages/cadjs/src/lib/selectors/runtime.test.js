@@ -231,6 +231,68 @@ test("buildSelectorRuntime exposes v1 GLB face runs from selector buffers", () =
   assert.equal(runtime.occurrenceIdByRowIndex.get(0), "o1");
 });
 
+function componentBundle(xOffset) {
+  // One component's selector data, as a component GLB actually carries it: the occurrence is
+  // "o1" LOCALLY, whatever the assembly ends up calling this instance of it.
+  return {
+    manifest: {
+      cadRef: "parts/source",
+      tables: {
+        occurrenceColumns: ["id", "path", "name", "sourceName", "parentId", "transform", "bbox", "shapeStart", "shapeCount", "faceStart", "faceCount", "edgeStart", "edgeCount"],
+        shapeColumns: ["id", "occurrenceId", "ordinal", "kind", "bbox", "center", "area", "volume", "faceStart", "faceCount", "edgeStart", "edgeCount"],
+        faceColumns: ["id", "occurrenceId", "shapeId", "ordinal", "surfaceType", "area", "center", "normal", "bbox", "edgeStart", "edgeCount", "relevance", "flags", "params", "triangleStart", "triangleCount"],
+        edgeColumns: ["id", "occurrenceId", "shapeId", "ordinal", "curveType", "length", "center", "bbox", "faceStart", "faceCount", "relevance", "flags", "params", "segmentStart", "segmentCount"],
+      },
+      occurrences: [["o1", "1", null, null, null, null, { min: [xOffset, 0, 0], max: [xOffset + 1, 1, 0] }, 0, 1, 0, 1, 0, 1]],
+      shapes: [["o1.s1", "o1", 1, "solid", { min: [xOffset, 0, 0], max: [xOffset + 1, 1, 0] }, [xOffset + 0.5, 0.5, 0], 1, 1, 0, 1, 0, 1]],
+      faces: [["o1.f1", "o1", "o1.s1", 1, "plane", 1, [xOffset + 0.5, 0.5, 0], [0, 0, 1], { min: [xOffset, 0, 0], max: [xOffset + 1, 1, 0] }, 0, 1, 0, 0, {}, 0, 1]],
+      edges: [["o1.e1", "o1", "o1.s1", 1, "line", 1, [xOffset + 0.5, 0, 0], { min: [xOffset, 0, 0], max: [xOffset + 1, 0, 0] }, 0, 1, 0, 0, {}, 0, 1]],
+      relations: { faceEdgeRows: [0], edgeFaceRows: [0] }
+    },
+    buffers: {
+      facePositions: new Float32Array([xOffset, 0, 0, xOffset + 1, 0, 0, xOffset, 1, 0]),
+      faceIndices: new Uint32Array([0, 1, 2]),
+      faceIds: new Uint32Array([0]),
+      edgePositions: new Float32Array([xOffset, 0, 0, xOffset + 1, 0, 0]),
+      edgeIndices: new Uint32Array([0, 1]),
+      edgeIds: new Uint32Array([0])
+    }
+  };
+}
+
+test("a composed assembly transforms the occurrence the CALLER named, not the component-local one", () => {
+  // The regression: composeSelectorRuntimes concatenates component TABLES verbatim, so every
+  // component's face/edge rows still say "o1" while its references were remapped to o1.1/o1.2.
+  // Matching a caller's transform against the row id therefore matched nothing, the transform
+  // applied to no geometry, and hovered edges stayed at rest while faces -- rebuilt from the
+  // live display meshes -- moved. The viewer keys parts by the REFERENCE id everywhere else.
+  const runtime = composeSelectorRuntimes([
+    buildSelectorRuntime(componentBundle(0), { remapOccurrenceId: "o1.1" }),
+    buildSelectorRuntime(componentBundle(100), { remapOccurrenceId: "o1.2" })
+  ]);
+  assert.deepEqual(
+    [...new Set(runtime.edges.map((row) => row.occurrenceId))],
+    ["o1"],
+    "rows are expected to carry the component-local id; that is the condition under test"
+  );
+
+  const transformed = buildTransformedSelectorRuntime(runtime, new Map([
+    ["o1.2", [1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1, 0, 0, 0, 0, 1]]
+  ]));
+
+  const edgeOf = (rt, id) => rt.references.find((reference) => reference.id === id);
+  // The named occurrence moves, in its rows, its reference pickData, AND the pick proxy the
+  // hover highlight slices its line positions out of.
+  assert.deepEqual(edgeOf(transformed, "o1.2.e1").pickData.center, [100.5, 5, 0]);
+  assert.deepEqual(transformed.edges[1].center, [100.5, 5, 0]);
+  assert.deepEqual(Array.from(transformed.proxy.edgePositions.slice(6)), [100, 5, 0, 101, 5, 0]);
+  assert.deepEqual(Array.from(transformed.proxy.facePositions.slice(9)), [100, 5, 0, 101, 5, 0, 100, 6, 0]);
+
+  // ...and the occurrence nobody named stays exactly where it was.
+  assert.deepEqual(edgeOf(transformed, "o1.1.e1").pickData.center, [0.5, 0, 0]);
+  assert.deepEqual(Array.from(transformed.proxy.edgePositions.slice(0, 6)), [0, 0, 0, 1, 0, 0]);
+});
+
 test("buildTransformedSelectorRuntime applies part transforms to rows and proxy geometry", () => {
   const bundle = {
     manifest: {

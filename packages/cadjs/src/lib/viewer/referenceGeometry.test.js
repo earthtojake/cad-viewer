@@ -11,7 +11,9 @@ import {
   createReferenceEdgeGeometryFromPoints,
   createReferenceFaceBoundaryGeometry,
   createReferenceFaceFillGeometry,
+  displayRecordForReference,
   faceFillOffset,
+  referenceExplodedViewMatrix,
   REFERENCE_CORNER_COLOR,
   REFERENCE_HIGHLIGHT_WIDTH_MULTIPLIER,
   REFERENCE_HOVER_HIGHLIGHT_WIDTH_MULTIPLIER
@@ -309,4 +311,55 @@ test("reference vertex markers keep existing marker sizing and material settings
   assert.equal(REFERENCE_HIGHLIGHT_WIDTH_MULTIPLIER, 3);
   assert.equal(REFERENCE_HOVER_HIGHLIGHT_WIDTH_MULTIPLIER, 3);
   assert.equal(buildVertexMarkerMesh(createRuntime(), THREE, { pickData: {} }), null);
+});
+
+
+function explodeRuntime(records) {
+  return { displayRecords: records };
+}
+
+function movedRecord(partId, x) {
+  return { partId, explodedViewMatrix: new THREE.Matrix4().makeTranslation(x, 0, 0) };
+}
+
+test("a reference resolves to the most specific display record that owns it", () => {
+  const parent = movedRecord("o1", 5);
+  const child = movedRecord("o1.3", 9);
+  const runtime = explodeRuntime([parent, child, movedRecord("o1.30", 99)]);
+
+  // o1.30 must NOT win on a string-prefix accident, and the deeper owner beats the shallower.
+  assert.equal(displayRecordForReference(runtime, { occurrenceId: "o1.3" }), child);
+  assert.equal(displayRecordForReference(runtime, { occurrenceId: "o1.3.1" }), child);
+  assert.equal(displayRecordForReference(runtime, { occurrenceId: "o1.4" }), parent);
+  assert.equal(displayRecordForReference(runtime, { occurrenceId: "o2.1" }), null);
+  assert.equal(displayRecordForReference(runtime, { occurrenceId: "" }), null);
+});
+
+test("the whole-model record never owns a reference", () => {
+  // `__model__` is the transform key for "move everything", not a part on screen; treating it
+  // as an owner would give every highlight the model-level matrix on top of its own.
+  const runtime = explodeRuntime([movedRecord("__model__", 7)]);
+  assert.equal(displayRecordForReference(runtime, { occurrenceId: "o1.1" }), null);
+});
+
+test("the exploded offset is reported only for a part that actually moved", () => {
+  const runtime = explodeRuntime([movedRecord("o1.1", 12), { partId: "o1.2", explodedViewMatrix: null }]);
+  const matrix = referenceExplodedViewMatrix(runtime, { occurrenceId: "o1.1" });
+  assert.equal(matrix.elements[12], 12);
+  assert.equal(referenceExplodedViewMatrix(runtime, { occurrenceId: "o1.2" }), null);
+  assert.equal(referenceExplodedViewMatrix(runtime, { occurrenceId: "o1.9" }), null);
+  assert.equal(referenceExplodedViewMatrix({}, { occurrenceId: "o1.1" }), null);
+});
+
+test("the exploded offset is the record's own matrix, NOT its composed effect matrix", () => {
+  // A parameter effect is already baked into the transformed selector runtime the highlight
+  // slices its positions from. Returning effect * exploded here would apply the effect twice
+  // and send the highlight to double the displacement.
+  const record = {
+    partId: "o1.1",
+    effectMatrix: new THREE.Matrix4().makeTranslation(100, 0, 0),
+    explodedViewMatrix: new THREE.Matrix4().makeTranslation(3, 0, 0)
+  };
+  const matrix = referenceExplodedViewMatrix(explodeRuntime([record]), { occurrenceId: "o1.1" });
+  assert.equal(matrix.elements[12], 3);
 });
