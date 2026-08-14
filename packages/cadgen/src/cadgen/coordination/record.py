@@ -38,6 +38,9 @@ import time
 from pathlib import Path
 from typing import Any, Mapping
 
+# Stdlib-only, like everything this module touches: the viewer's server imports it.
+from cadgen._internal.atomic_replace import replace_atomic
+
 SCHEMA_VERSION = 3
 
 OUTCOME_RUNNING = None
@@ -100,7 +103,7 @@ def write_record(path: Path | str, record: Mapping[str, Any]) -> bool:
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         temp_path.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
-        os.replace(temp_path, target)
+        replace_atomic(temp_path, target)
         return True
     except OSError:
         with contextlib.suppress(OSError):

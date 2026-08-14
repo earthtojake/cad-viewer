@@ -38,6 +38,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cadgen._internal.atomic_replace import replace_atomic
 from cadgen._internal.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
 from cadgen._internal.node_runtime import node_builder_script, run_node_builder
 from cadgen._internal.package_freshness import (
@@ -51,6 +52,7 @@ from cadgen._internal.source_hash import (
     python_source_hash,
 )
 from cadgen.catalog import render_package_dir
+from cadgen.drawing_checks import document_is_drawing
 from cadgen.render import relative_to_file, sha256_file
 
 DRAWING_PACKAGE_KIND = "drawing-package"
@@ -71,6 +73,28 @@ DRAWING_PACKAGE_KIND = "drawing-package"
 DXF_PACKAGE_SCHEMA_VERSION = 6
 DRAWING_DESCRIPTOR_NAME = "drawing.json"
 DRAWING_PREVIEW_NAME = "preview.glb"
+# What KIND of DXF the package holds, decided from the file itself at build time. A cut layout
+# bakes a 3D prism of its profile; a dimensioned drawing has no flat pattern and carries only
+# its 2D geometry. Recorded so a reader does not have to re-parse the DXF to find out.
+DRAWING_PROFILE_CUT = "cut"
+DRAWING_PROFILE_DRAWING = "drawing"
+
+
+def descriptor_is_drawing(descriptor: object) -> bool:
+    """Whether this package holds a dimensioned drawing rather than a cut layout."""
+    if not isinstance(descriptor, dict):
+        return False
+    return str(descriptor.get("profile") or "").strip().lower() == DRAWING_PROFILE_DRAWING
+
+
+def drawing_payload_keys(descriptor: object) -> tuple[str, ...]:
+    """The payload refs this package must hold, which depends on what it is.
+
+    ONE definition, because cadgen's producer gate and the viewer's validator must ask the
+    same question -- a check one makes and the other does not is either a silent stale package
+    or a rebuild that never finishes.
+    """
+    return ("geometry",) if descriptor_is_drawing(descriptor) else ("preview", "geometry")
 
 # The Node builder that turns drawing.dxf into preview.glb.
 DRAWING_PREVIEW_BUILDER = "dxf-artifact.mjs"
@@ -162,7 +186,7 @@ def _deterministic_dxf_output(document: object):
             # same document (e.g. a --dxf export) keep real provenance.
             try:
                 previous_created = metadata[ezdxf_document.CREATED_BY_EZDXF]
-            except Exception:
+            except Exception:  # noqa: BLE001 - ezdxf metadata API drift; a missing created-by marker degrades gracefully
                 previous_created = None
             metadata[ezdxf_document.CREATED_BY_EZDXF] = fixed_marker
         yield
@@ -225,6 +249,7 @@ def build_drawing_preview(
     dxf_text: str,
     run: object,
     name: str = "",
+    profile: str = DRAWING_PROFILE_CUT,
 ) -> dict[str, object]:
     """Build ``preview.glb`` from the package's ``drawing.dxf``, in a Node child.
 
@@ -253,6 +278,7 @@ def build_drawing_preview(
             "--package-dir", str(package_dir),
             "--run-id", run_id,
             "--name", name or package_dir.name,
+            "--profile", str(profile or DRAWING_PROFILE_CUT),
         ],
         run=run,
         stdin_text=dxf_text,
@@ -265,7 +291,17 @@ def build_drawing_preview(
         raise RuntimeError(
             f"DXF preview builder reported a different run id than the lock holder: {package_dir}"
         )
-    if not drawing_preview_path(package_dir).is_file():
+    # A drawing profile writes geometry.json and no prism, by design; anything else must have
+    # produced the preview it claims. Checking what the child SAID it wrote against what is on
+    # disk is the point of this gate -- a builder that silently skipped its payload would leave
+    # a descriptor pointing at nothing.
+    wrote_preview = str(payload.get("preview") or "").strip()
+    if wrote_preview and not drawing_preview_path(package_dir).is_file():
+        raise RuntimeError(f"DXF preview builder wrote no {DRAWING_PREVIEW_NAME}: {package_dir}")
+    geometry_ref = str(payload.get("geometryFile") or "").strip()
+    if not geometry_ref or not (package_dir / geometry_ref).is_file():
+        raise RuntimeError(f"DXF preview builder wrote no geometry payload: {package_dir}")
+    if not wrote_preview and str(payload.get("profile") or "").strip().lower() != DRAWING_PROFILE_DRAWING:
         raise RuntimeError(f"DXF preview builder wrote no {DRAWING_PREVIEW_NAME}: {package_dir}")
     return payload
 
@@ -278,7 +314,7 @@ def _write_descriptor(package_dir: Path, descriptor: dict[str, object]) -> dict[
     with temp_path.open("w", encoding="utf-8") as handle:
         json.dump(descriptor, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    os.replace(temp_path, descriptor_path)
+    replace_atomic(temp_path, descriptor_path)
     return descriptor
 
 
@@ -308,11 +344,23 @@ def write_drawing_package(
     # bake, not a product of it, and a generated DXF is reproducible on demand -- so it is
     # streamed to the mesher and nothing lands in __cadgen__ but preview.glb.
     dxf_text = serialize_drawing_document(document)
+    # A dimensioned drawing has no flat pattern, so there is nothing to bake and nothing to
+    # fold: preview.glb is the 3D prism of a CUT profile. The file says which it is (see
+    # cadgen.drawing_checks.document_is_drawing), so a drawing package carries its 2D geometry
+    # and declares the omission rather than failing on a preview it should never have had.
+    is_drawing, _ = document_is_drawing(document)
+    # The builder still runs: geometry.json is the parsed 2D drawing, which is what the viewer
+    # renders and what a drawing package is FOR. Only the 3D prism is skipped.
     preview = build_drawing_preview(
-        package_dir, dxf_text=dxf_text, run=run, name=resolved_script.name
+        package_dir,
+        dxf_text=dxf_text,
+        run=run,
+        name=resolved_script.name,
+        profile=DRAWING_PROFILE_DRAWING if is_drawing else DRAWING_PROFILE_CUT,
     )
     descriptor: dict[str, object] = {
         "kind": DRAWING_PACKAGE_KIND,
+        "profile": DRAWING_PROFILE_DRAWING if is_drawing else DRAWING_PROFILE_CUT,
         "packageSchemaVersion": DXF_PACKAGE_SCHEMA_VERSION,
         "sourceKind": "python",
         # Like the assembly package, sourcePath/sourceClosureFiles are relative to the
@@ -368,12 +416,23 @@ def write_imported_drawing_package(
     return _write_descriptor(package_dir, descriptor)
 
 
-def _preview_descriptor_fields(preview: dict[str, object]) -> dict[str, object]:
-    """The preview payload ref plus the bake block and its hash."""
+def _preview_descriptor_fields(preview: dict[str, object] | None) -> dict[str, object]:
+    """The preview payload ref plus the bake block and its hash.
+
+    ``None`` for a drawing: no bake happened, so recording a bakeHash would claim a preview
+    that does not exist and the freshness gates would then chase it forever.
+    """
+    if preview is None:
+        return {}
+    geometry = str(preview.get("geometryFile") or "").strip() or None
+    # A drawing has no prism, so no preview ref and no bake to record. Claiming either would
+    # send both freshness gates chasing a payload that was never written.
+    if str(preview.get("profile") or "").strip().lower() == DRAWING_PROFILE_DRAWING:
+        return {"geometry": geometry}
     bake = drawing_preview_bake_settings()
     fields: dict[str, object] = {
         "preview": DRAWING_PREVIEW_NAME,
-        "geometry": str(preview.get("geometryFile") or "").strip() or None,
+        "geometry": geometry,
         "bake": bake,
         "bakeHash": canonical_bake_hash(bake),
     }
@@ -456,13 +515,17 @@ def drawing_package_current(source_path: Path) -> bool:
     # The preview settings this build froze into preview.glb. No other signal can see a
     # change to them, so without this a thickness edit would leave every built package
     # rendering its old bake, silently.
-    if not bake_hash_matches(descriptor, canonical_bake_hash(drawing_preview_bake_settings())):
-        return False
-    # The package's one payload, named by the descriptor. A missing preview.glb has to be
+    # The package's payloads, named by the descriptor. A missing preview.glb has to be
     # stale here as well as in the viewer, or the CLI would report "current" over a package
     # the viewer cannot render. There is no longer a `dxf` payload to check: the cache holds
     # what was computed, and a generated drawing's DXF is produced on demand.
-    for payload_key in ("preview", "geometry"):
+    # A drawing package has no preview and no bake -- see write_drawing_package. Requiring one
+    # here would report every drawing stale forever, which is how a "current" check turns into
+    # a rebuild loop.
+    if not descriptor_is_drawing(descriptor):
+        if not bake_hash_matches(descriptor, canonical_bake_hash(drawing_preview_bake_settings())):
+            return False
+    for payload_key in drawing_payload_keys(descriptor):
         payload_ref = str(descriptor.get(payload_key) or "").strip()
         if not payload_ref or not (package_dir / payload_ref).is_file():
             return False

@@ -293,7 +293,7 @@ def _flattened_line_entities(entity, *, layer_name: str) -> list[LineEntity] | N
         return None
     try:
         points = [(float(p[0]), float(p[1])) for p in flattening(0.05)]
-    except Exception:
+    except Exception:  # noqa: BLE001 - a degenerate or unsupported entity must not fail the render payload
         return None
     if len(points) < 2:
         return None

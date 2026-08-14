@@ -391,7 +391,7 @@ class LocalAssetBackend:
         candidate = os.path.join(os.path.dirname(step_path), os.path.basename(step_path) + ".py")
         return candidate if scanner._file_has_python_generator(candidate, "gen_step") else ""
 
-    # POST /__cad/artifact build — subprocess cadgen.step_artifact (OCP stays out of
+    # POST /__cad/artifact build — subprocess cadgen.step_artifact_cli (OCP stays out of
     # the server process).
     def generate_step_artifact(self, file_ref, force, resolved_root, catalog):
         resolved = self.resolve_step_source(file_ref, resolved_root)
@@ -411,7 +411,7 @@ class LocalAssetBackend:
             # package (the logical --step path never exists).
             args += ["--source-path", generator]
         result = self._run_artifact_build(
-            "cadgen.step_artifact", args, resolved_root["rootPath"],
+            "cadgen.step_artifact_cli", args, resolved_root["rootPath"],
             force=force, error_label="STEP render artifact build failed",
         )
         return {**result, "stepPath": step_path}

@@ -91,18 +91,30 @@ async function main() {
   }
   const dxfData = parseDxf(dxfText, { fileRef: name });
 
-  reportPhase("mesh");
-  await MeshoptEncoder.ready;
-  const { bytes, stats } = buildDxfPreviewGlb(dxfData, {
-    encoder: MeshoptEncoder,
-    name,
-  });
+  // A dimensioned drawing has no flat pattern: preview.glb is the 3D prism of a CUT profile,
+  // and there is no profile to extrude. The producer decides which this is from the file's own
+  // DXF apparatus (cadgen.drawing_checks.document_is_drawing) and says so here, so the two
+  // never disagree about what the package should contain.
+  const drawingProfile = String(args.profile || "cut").trim().toLowerCase() === "drawing";
+
+  let bytes = null;
+  let stats = { bendLineCount: 0, bendAxisX: [], triangleCount: 0, vertexCount: 0 };
+  if (!drawingProfile) {
+    reportPhase("mesh");
+    await MeshoptEncoder.ready;
+    ({ bytes, stats } = buildDxfPreviewGlb(dxfData, {
+      encoder: MeshoptEncoder,
+      name,
+    }));
+  }
 
   reportPhase("write");
-  const previewPath = path.join(packageDir, PREVIEW_GLB_NAME);
-  const tempPath = `${previewPath}.tmp-${process.pid}`;
-  fs.writeFileSync(tempPath, bytes);
-  fs.renameSync(tempPath, previewPath);
+  if (bytes) {
+    const previewPath = path.join(packageDir, PREVIEW_GLB_NAME);
+    const tempPath = `${previewPath}.tmp-${process.pid}`;
+    fs.writeFileSync(tempPath, bytes);
+    fs.renameSync(tempPath, previewPath);
+  }
 
   // The parsed 2D geometry, cached so the viewer can RE-MESH live and overlay the drawing's
   // annotations. Curved bends need tessellated bend bands, and the flat prism has no
@@ -125,11 +137,12 @@ async function main() {
     ok: true,
     // Echoed so the parent can assert that ONE run id spanned both runtimes.
     runId,
-    preview: PREVIEW_GLB_NAME,
+    profile: drawingProfile ? "drawing" : "cut",
+    preview: bytes ? PREVIEW_GLB_NAME : null,
     geometryFile: GEOMETRY_JSON_NAME,
     bakeFormat: DXF_PREVIEW_BAKE_FORMAT,
     referenceThicknessMm: DXF_PREVIEW_REFERENCE_THICKNESS_MM,
-    bytes: bytes.length,
+    bytes: bytes ? bytes.length : 0,
     bendLineCount: stats.bendLineCount,
     bendAxisX: stats.bendAxisX,
     triangleCount: stats.triangleCount,

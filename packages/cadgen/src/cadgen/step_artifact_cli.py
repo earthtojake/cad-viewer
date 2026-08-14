@@ -52,15 +52,15 @@ def _cad_ref_for_step(repo_root: Path, step_path: Path) -> str:
 
 
 def _scene_has_assembly_structure(scene: LoadedStepScene) -> bool:
-    stack = list(scene.roots)
-    if len(stack) > 1:
+    """True if the scene's product hierarchy has child relationships.
+
+    Multiple roots OR any root with children indicates assembly structure.
+    The check is deliberately shallow: any descendant implies a child of the
+    root, so a root with children already makes the model an assembly.
+    """
+    if len(scene.roots) > 1:
         return True
-    while stack:
-        node = stack.pop()
-        if node.children:
-            return True
-        stack.extend(node.children)
-    return False
+    return any(node.children for node in scene.roots)
 
 
 def infer_entry_kind(step_path: Path, scene: LoadedStepScene) -> str:
@@ -72,7 +72,7 @@ def infer_entry_kind(step_path: Path, scene: LoadedStepScene) -> str:
     metadata_kind = None
     try:
         metadata_kind = read_text_to_cad_step_metadata(step_path).get("entryKind")
-    except Exception:
+    except Exception:  # noqa: BLE001 - a STEP whose embedded metadata cannot be read has no entryKind to honor
         metadata_kind = None
     if metadata_kind in {"part", "assembly"}:
         return metadata_kind
@@ -115,7 +115,7 @@ def _entries_by_step_path_for_repo(repo_root: Path, spec: EntrySpec) -> dict[Pat
             entry_spec = _entry_spec_from_source(source)
             if entry_spec.step_path is not None:
                 entries[entry_spec.step_path.resolve()] = entry_spec
-    except Exception:
+    except Exception:  # noqa: BLE001 - a repo scan failure degrades to only the requested spec
         entries = {}
     if spec.step_path is not None:
         entries[spec.step_path.resolve()] = spec
@@ -247,7 +247,7 @@ def _current_artifact_for_spec(spec: EntrySpec) -> StepTopologyArtifact | None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m cadgen.step_artifact",
+        prog="python -m cadgen.step_artifact_cli",
         description="Build the CAD Viewer render package for one STEP/STP file or gen_step() generator.",
     )
     parser.add_argument("--repo-root", required=True, help="Repository/workspace root for relative STEP metadata.")

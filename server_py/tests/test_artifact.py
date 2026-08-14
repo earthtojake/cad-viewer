@@ -39,6 +39,16 @@ from cadgen._internal.package_freshness import (  # noqa: E402
     STEP_PACKAGE_VERSION as _STEP_SCHEMA_VERSION,
     canonical_bake_hash,
 )
+from cadgen._internal.source_hash import closure_for_files  # noqa: E402
+
+
+def _dump(path, payload):
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+
+def _closure_for(source, base):
+    return closure_for_files(pathlib.Path(source), [pathlib.Path(source)], base=pathlib.Path(base))
 
 _DXF_SCHEMA_VERSION = DXF_PACKAGE_SCHEMA_VERSION
 _IMPLICIT_SCHEMA_VERSION = IMPLICIT_PACKAGE_SCHEMA_VERSION
@@ -1188,7 +1198,7 @@ class ArtifactFormatDispatchIsTotal(unittest.TestCase):
 
         dispatch = worker._module_dispatch()
         for module in (
-            "cadgen.step_artifact",
+            "cadgen.step_artifact_cli",
             "cadgen.dxf_artifact",
             "cadgen.implicit_artifact",
             "cadgen.step_export_target",
@@ -1205,3 +1215,57 @@ class ArtifactFormatDispatchIsTotal(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DrawingProfileGate(unittest.TestCase):
+    """A dimensioned drawing bakes no prism, and must not be chased for one (issue #246)."""
+
+    def test_a_drawing_package_without_a_bake_is_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = os.path.join(directory, "workshop.dxf.py")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write("def gen_dxf():\n    raise NotImplementedError\n")
+            package = os.path.join(directory, "__cadgen__", "models", "workshop.dxf.py")
+            os.makedirs(package, exist_ok=True)
+            with open(os.path.join(package, "geometry.json"), "w", encoding="utf-8") as handle:
+                handle.write("{}")
+            closure = _closure_for(source, directory)
+            _dump(os.path.join(package, "drawing.json"), {
+                "kind": "drawing-package",
+                "packageSchemaVersion": DXF_PACKAGE_SCHEMA_VERSION,
+                "profile": "drawing",
+                "sourceKind": "python",
+                "sourcePath": "workshop.dxf.py",
+                "geometry": "geometry.json",
+                "sourceClosureHash": closure.closure_hash,
+                "sourceClosureFiles": list(closure.files),
+            })
+            self.assertEqual((True, None), artifact.validate_dxf_freshness(directory, source))
+
+    def test_a_drawing_package_that_claims_a_bake_is_still_stale(self) -> None:
+        # The exemption is "records no bake", not "drawings skip the gate": a bakeHash on a
+        # package that baked nothing is a claim about a payload that does not exist.
+        with tempfile.TemporaryDirectory() as directory:
+            source = os.path.join(directory, "workshop.dxf.py")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write("def gen_dxf():\n    raise NotImplementedError\n")
+            package = os.path.join(directory, "__cadgen__", "models", "workshop.dxf.py")
+            os.makedirs(package, exist_ok=True)
+            with open(os.path.join(package, "geometry.json"), "w", encoding="utf-8") as handle:
+                handle.write("{}")
+            closure = _closure_for(source, directory)
+            _dump(os.path.join(package, "drawing.json"), {
+                "kind": "drawing-package",
+                "packageSchemaVersion": DXF_PACKAGE_SCHEMA_VERSION,
+                "profile": "drawing",
+                "sourceKind": "python",
+                "sourcePath": "workshop.dxf.py",
+                "geometry": "geometry.json",
+                "bakeHash": "deadbeef",
+                "sourceClosureHash": closure.closure_hash,
+                "sourceClosureFiles": list(closure.files),
+            })
+            self.assertEqual(
+                (False, "stale_dxf_artifact"),
+                artifact.validate_dxf_freshness(directory, source),
+            )

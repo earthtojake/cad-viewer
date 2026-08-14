@@ -791,7 +791,7 @@ class BatchSnapshotRenderer:
                 timeout=DEFAULT_TIMEOUT_SECONDS * 1000,
             )
             self.started = True
-        except Exception:
+        except Exception:  # noqa: BLE001 - any startup failure must still tear down the browser, then re-raise
             await self.close()
             raise
 
@@ -842,19 +842,19 @@ class BatchSnapshotRenderer:
         if self.context is not None:
             try:
                 await self.context.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort teardown; a failing close must not mask the original error
                 pass
             self.context = None
         if self.browser is not None:
             try:
                 await self.browser.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort teardown; a failing close must not mask the original error
                 pass
             self.browser = None
         if self.playwright is not None:
             try:
                 await self.playwright.stop()
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort teardown; a failing close must not mask the original error
                 pass
             self.playwright = None
         self.page = None

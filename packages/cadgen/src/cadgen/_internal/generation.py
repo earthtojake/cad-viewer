@@ -707,7 +707,7 @@ def _shape_payload_entry_kind(shape: object, *, fallback: str) -> str:
 def _shape_has_explicit_children(shape: object) -> bool:
     try:
         from build123d import Shape as Build123dShape
-    except Exception:
+    except ImportError:  # build123d is optional for this heuristic; no build123d means no explicit children
         return False
     if not isinstance(shape, Build123dShape):
         return False
@@ -722,7 +722,7 @@ def _shape_is_multi_child_compound(shape: object) -> bool:
         from OCP.TopAbs import TopAbs_COMPOUND
         from OCP.TopoDS import TopoDS_Iterator
         from build123d import Shape as Build123dShape
-    except Exception:
+    except ImportError:  # build123d/OCP optional; unavailable means the compound heuristic cannot run
         return False
     if not isinstance(shape, Build123dShape):
         return False
@@ -732,7 +732,7 @@ def _shape_is_multi_child_compound(shape: object) -> bool:
     try:
         if wrapped.ShapeType() != TopAbs_COMPOUND:
             return False
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP ShapeType() can raise on unexpected wrapper contents
         return False
     iterator = TopoDS_Iterator(wrapped)
     count = 0
@@ -1834,10 +1834,10 @@ def _run_with_spec_generation_status(
     """Run ``action`` while holding the model's build lock, reporting its progress.
 
     Delegates to :func:`cadgen.coordination.artifact_build`, which is the SAME primitive
-    ``cadgen.step_artifact`` uses. That shared implementation is the point: the lock, the
+    ``cadgen.step_artifact_cli`` uses. That shared implementation is the point: the lock, the
     status record and the post-lock currency re-check used to be assembled by hand at each
     producer, and the two producers had drifted -- this one re-checked under the lock,
-    step_artifact's did not, so a queued viewer build redid a peer's whole generator+mesh.
+    step_artifact_cli's did not, so a queued viewer build redid a peer's whole generator+mesh.
 
     ``skip_if_current`` is re-evaluated AFTER the lock is acquired. The pre-lock fast path
     cannot cover the concurrent case: it ran before the other build existed.
@@ -1845,7 +1845,7 @@ def _run_with_spec_generation_status(
     ``action`` is called as ``action(spec, run)``; ``run`` is the progress reporter.
 
     ``lock_timeout_s`` bounds the wait for a peer's lock, exactly as it does in
-    ``cadgen.step_artifact``: 0 waits, and a positive value gives up and reports the peer
+    ``cadgen.step_artifact_cli``: 0 waits, and a positive value gives up and reports the peer
     instead. Same flag, same default, same meaning -- see :mod:`cadgen._internal.cli_locking`.
     """
     kind = DRAWING_PACKAGE if generator_name == "gen_dxf" else STEP_PACKAGE

@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Iterator
 
+from cadgen._internal.atomic_replace import replace_atomic
 from cadgen.catalog import source_from_path
 from cadgen.cli_logging import CliLogger
 from cadgen.coordination import (
@@ -26,7 +27,7 @@ from cadgen._internal.generation import (
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE
 from cadgen.catalog import render_package_dir
 from cadgen._internal.step_scene import LoadedStepScene, load_step_scene_cached
-from cadgen.step_artifact import infer_entry_kind
+from cadgen.step_artifact_cli import infer_entry_kind
 from cadgen.step_targets import (
     REGENERATE_STEP_COMMAND,
     REGENERATE_STEP_PROMPT,
@@ -440,7 +441,7 @@ def _write_topology_sidecar(
             angular_deflection=options.angular_deflection,
             selector_bundle=bundle,
         )
-        os.replace(temp_path, target)
+        replace_atomic(temp_path, target)
     except Exception as exc:  # noqa: BLE001 - cache write is advisory
         if logger is not None:
             logger.debug(f"topology.glb cache write skipped for {spec.cad_ref}: {exc}")

@@ -178,7 +178,7 @@ export const RENDER_CAPABILITIES = Object.freeze({
     params: PARAMETER_SOURCE.SIDECAR,
     animations: true,
     artifactManaged: true,
-    rebuildCommand: "python -m cadgen.step_artifact --repo-root . --step",
+    rebuildCommand: "python -m cadgen.step_artifact_cli --repo-root . --step",
     exportFormats: Object.freeze(["step", "3mf", "stl", "glb"])
   }),
   [RENDER_FORMAT.STL]: Object.freeze({ ...DEFAULT_CAPABILITIES, ...MESH_CAPABILITIES, label: "STL" }),

@@ -379,7 +379,7 @@ def artifact_build(
 
         try:
             yield run
-        except BaseException:
+        except BaseException:  # include KeyboardInterrupt/SystemExit: a cancelled run is a failed run
             _publish(_record.OUTCOME_FAILED)
             raise
         reporter.finish()
@@ -509,7 +509,7 @@ def generator_busy(
         run = BuildRun(reporter, run_id)
         try:
             yield run
-        except BaseException:
+        except BaseException:  # include KeyboardInterrupt/SystemExit: a cancelled run is a failed run
             _publish(_record.OUTCOME_FAILED)
             raise
         reporter.finish()

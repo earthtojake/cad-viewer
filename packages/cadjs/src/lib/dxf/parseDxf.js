@@ -11,6 +11,8 @@ function toFiniteNumber(value, fallback = 0) {
 // mirroring cadgen.drawing_checks.layer_intent so validation, snapshots, and
 // rendering classify layers identically ("PREFORM" must not match "ref").
 const LAYER_INTENT_BY_TOKEN = new Map([
+  ["cut", "cut"],
+  ["profile", "cut"],
   ["bend", "bend"],
   ["fold", "bend"],
   ["engrave", "engrave"],
@@ -20,12 +22,35 @@ const LAYER_INTENT_BY_TOKEN = new Map([
   ["note", "reference"],
   ["notes", "reference"],
   ["annotation", "reference"],
-  ["construction", "reference"]
+  ["construction", "reference"],
+  ["dim", "reference"],
+  ["dims", "reference"],
+  ["dimension", "reference"],
+  ["dimensions", "reference"],
+  ["section", "reference"],
+  ["sections", "reference"],
+  ["hidden", "reference"],
+  ["center", "reference"],
+  ["centre", "reference"],
+  ["centerline", "reference"],
+  ["centreline", "reference"],
+  ["phantom", "reference"],
+  ["title", "reference"],
+  ["titleblock", "reference"],
+  ["border", "reference"],
+  ["frame", "reference"],
+  ["viewport", "reference"],
+  ["hatch", "reference"],
+  ["text", "reference"],
+  ["label", "reference"],
+  ["labels", "reference"],
+  ["leader", "reference"],
+  ["axis", "reference"]
 ]);
 
 function semanticKindForLayer(layerName) {
   const tokens = String(layerName || "").trim().toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
-  for (const intent of ["bend", "engrave", "reference"]) {
+  for (const intent of ["cut", "bend", "engrave", "reference"]) {
     if (tokens.some((token) => LAYER_INTENT_BY_TOKEN.get(token) === intent)) {
       return intent;
     }

@@ -1,2 +1,2 @@
 [console_scripts]
-cadgen-step-artifact = cadgen.step_artifact:main
+cadgen-step-artifact = cadgen.step_artifact_cli:main

@@ -29,7 +29,7 @@ src/cadgen/selector_types.py
 src/cadgen/snapshot_cli.py
 src/cadgen/snapshot_core.py
 src/cadgen/sources.py
-src/cadgen/step_artifact.py
+src/cadgen/step_artifact_cli.py
 src/cadgen/step_artifacts.py
 src/cadgen/step_export.py
 src/cadgen/step_export_target.py
@@ -44,6 +44,7 @@ src/cadgen.egg-info/requires.txt
 src/cadgen.egg-info/top_level.txt
 src/cadgen/_internal/__init__.py
 src/cadgen/_internal/assembly_spec.py
+src/cadgen/_internal/atomic_replace.py
 src/cadgen/_internal/cli_errors.py
 src/cadgen/_internal/cli_locking.py
 src/cadgen/_internal/component_package.py

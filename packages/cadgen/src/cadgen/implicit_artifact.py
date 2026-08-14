@@ -82,7 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--repo-root",
         default=".",
-        help="Repository/workspace root (accepted for CLI parity with step_artifact).",
+        help="Repository/workspace root (accepted for CLI parity with step_artifact_cli).",
     )
     parser.add_argument("--source-path", required=True, help="Implicit CAD source path (<name>.implicit.js).")
     parser.add_argument(
@@ -126,7 +126,7 @@ def build_implicit_artifact(
     unlike a cached DXF the package's compressed render GLB cannot be turned back into an
     export one -- so asking for a missing sibling re-bakes, and asking for one that is
     already there costs nothing."""
-    del repo_root  # payload paths are cwd-relative; kept for CLI parity with step_artifact
+    del repo_root  # payload paths are cwd-relative; kept for CLI parity with step_artifact_cli
     resolved_source = Path(source_path).expanduser().resolve()
     if not resolved_source.is_file():
         raise FileNotFoundError(f"Implicit CAD source does not exist: {resolved_source}")

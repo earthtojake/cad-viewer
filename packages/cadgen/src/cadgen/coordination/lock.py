@@ -25,6 +25,16 @@ Readers probe with ``LOCK_SH``, writers take ``LOCK_EX``. That asymmetry matters
 conflicts per open file description, not per process, so two concurrent ``LOCK_EX`` probes
 of an UNHELD sentinel conflict with each other and one of them wrongly reports a build in
 flight. Measured at ~6% false positives with four threads before this was fixed.
+
+On Windows there is no ``fcntl``; :mod:`msvcrt` provides byte-range locks (``locking``)
+instead. Kernel-ownership on close behaves the same, but the model differs in two ways
+that matter: ``msvcrt.locking`` locks a byte region at the CURRENT file position (not the
+whole descriptor), and it has no shared mode -- every operation, probes included, takes an
+exclusive region lock. A sentinel therefore must hold a byte before it can be locked at
+all, and two concurrent Windows probes of the same sentinel can false-positive "held"
+(the very race the POSIX shared-probe asymmetry exists to avoid). Locking past EOF is an
+error on Windows, so an EMPTY sentinel is reported as degraded rather than held -- a
+crash between ``open()`` and stamping must not wedge every later build forever.
 """
 
 from __future__ import annotations
@@ -38,10 +48,24 @@ import uuid
 from pathlib import Path
 from typing import Callable, Iterator, NamedTuple
 
-try:  # POSIX only; on a platform without fcntl every operation degrades to a no-op.
+try:  # POSIX only; on a platform without fcntl every operation uses the windows backend
+    # or degrades to a no-op.
     import fcntl
 except ImportError:  # pragma: no cover - not reachable on darwin/linux CI
     fcntl = None  # type: ignore[assignment]
+
+try:  # Windows only; msvcrt.locking is a byte-range lock, not a whole-descriptor lock.
+    import msvcrt
+except ImportError:  # pragma: no cover - not reachable on darwin/linux CI
+    msvcrt = None  # type: ignore[assignment]
+
+
+# errnos that mean "a peer holds the lock right now", per backend. POSIX flock raises
+# EWOULDBLOCK/EAGAIN for a contended LOCK_NB; Windows msvcrt raises EACCES instead. Folding
+# EACCES into the POSIX set would misread one of flock's "the filesystem refused this"
+# errors as contention, so the sets stay separate.
+_FCNTL_BUSY_ERRNOS = (errno.EWOULDBLOCK, errno.EAGAIN)
+_MSVCRT_BUSY_ERRNOS = (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES)
 
 
 _HELD = threading.local()
@@ -66,14 +90,36 @@ class Contended(RuntimeError):
 
 class ProbeResult(NamedTuple):
     """``held`` -- a peer holds the lock right now. ``degraded`` -- we could not tell,
-    because locking is unavailable here (no ``fcntl``, or a filesystem that refuses it)."""
+    because locking is unavailable here (no ``fcntl``/``msvcrt``, or a filesystem that
+    refuses it)."""
 
     held: bool
     degraded: bool
 
 
 def locking_available() -> bool:
-    return fcntl is not None
+    return fcntl is not None or msvcrt is not None
+
+
+def _unlock(handle) -> None:
+    """Release whatever backend lock ``handle`` holds; the caller owns error policy."""
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    else:
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _pad_sentinel(handle) -> None:
+    """Ensure the sentinel holds at least one byte, so a Windows region lock is legal.
+
+    Locking past EOF is an error on Windows, and a brand-new sentinel is 0 bytes.
+    Sentinels are never unlinked, so this pad happens at most once in the file's life and
+    writes nothing visible to ``read_run_id`` (which strips whitespace)."""
+    if handle.seek(0, os.SEEK_END) == 0:
+        handle.write(b" ")
+        handle.flush()
+    handle.seek(0)
 
 
 def new_run_id() -> str:
@@ -87,7 +133,7 @@ def probe(lock_path: Path | str) -> ProbeResult:
     sentinel under ``__cadgen__`` for a model that had never been built, as a side effect
     of a status GET. A missing sentinel means no run has ever held it, which is idle.
     """
-    if fcntl is None:
+    if fcntl is None and msvcrt is None:
         return ProbeResult(held=False, degraded=True)
     path = Path(lock_path)
     try:
@@ -98,16 +144,33 @@ def probe(lock_path: Path | str) -> ProbeResult:
         # Unreadable sentinel: we cannot tell, and must not claim a build is running.
         return ProbeResult(held=False, degraded=True)
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
-    except OSError as exc:
-        if exc.errno in (errno.EWOULDBLOCK, errno.EAGAIN):
-            return ProbeResult(held=True, degraded=False)
-        # ENOLCK / EOPNOTSUPP -- the filesystem does not do advisory locks (NFS, SMB,
-        # some bind mounts). Report degraded rather than inventing a state.
-        return ProbeResult(held=False, degraded=True)
-    else:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        return ProbeResult(held=False, degraded=False)
+        if fcntl is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in _FCNTL_BUSY_ERRNOS:
+                    return ProbeResult(held=True, degraded=False)
+                # ENOLCK / EOPNOTSUPP -- the filesystem does not do advisory locks (NFS,
+                # SMB, some bind mounts). Report degraded rather than inventing a state.
+                return ProbeResult(held=False, degraded=True)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return ProbeResult(held=False, degraded=False)
+        # Windows backend: a 1-byte EXCLUSIVE region lock (msvcrt has no shared mode).
+        # An empty sentinel cannot be locked at all (lock-past-EOF is an error), and it
+        # must read as UNKNOWN, never held: see the module docstring.
+        if handle.seek(0, os.SEEK_END) == 0:
+            return ProbeResult(held=False, degraded=True)
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if exc.errno in _MSVCRT_BUSY_ERRNOS:
+                return ProbeResult(held=True, degraded=False)
+            return ProbeResult(held=False, degraded=True)
+        else:
+            _unlock(handle)
+            return ProbeResult(held=False, degraded=False)
     finally:
         handle.close()
 
@@ -148,10 +211,10 @@ def exclusive(
 
     ``None`` (a producer with no coordinated output dir) is a no-op, and so is every
     failure to lock: an unwritable ``__cadgen__``, a filesystem without advisory locks, or
-    a platform without ``fcntl`` degrades to "no coordination" and yields None. A build
-    must never fail because a lock was unavailable.
+    a platform without ``fcntl`` or ``msvcrt`` degrades to "no coordination" and yields
+    None. A build must never fail because a lock was unavailable.
     """
-    if lock_path is None or fcntl is None:
+    if lock_path is None or (fcntl is None and msvcrt is None):
         yield None
         return
 
@@ -192,7 +255,7 @@ def exclusive(
             yield recorded
         finally:
             with contextlib.suppress(OSError):
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _unlock(handle)
     finally:
         held.discard(key)
         with contextlib.suppress(OSError):
@@ -206,29 +269,40 @@ def _acquire(
     deadline_ms: float | None,
     on_wait: Callable[[float], None] | None,
 ) -> None:
-    """Take ``LOCK_EX``, honouring an optional deadline and an optional wait notice.
+    """Take the exclusive lock, honouring an optional deadline and an optional wait notice.
 
-    With neither, this is a plain blocking ``flock`` -- the kernel queues us and the hot
-    path costs one syscall. With either, the wait has to POLL: ``flock`` has no timeout,
-    and alarm-based interruption is not thread-safe, so there is no way to bound the wait
-    or to get control back periodically while blocked inside it. The interval is short
-    enough to be imperceptible against a wait long enough to be worth reporting.
+    POSIX, with neither: a plain blocking ``flock`` -- the kernel queues us and the hot
+    path costs one syscall. Every other case POLLS: ``flock`` has no timeout and
+    alarm-based interruption is not thread-safe, and ``msvcrt.LK_LOCK`` (the Windows
+    blocking mode) retries only ten times at one-second intervals before raising, so it
+    would turn a genuinely long wait into a spurious degradation. Polling gives the
+    deadline and the wait notice meaning on both backends. The interval is short enough
+    to be imperceptible against a wait long enough to be worth reporting.
 
     Raises :class:`Contended` when ``deadline_ms`` elapses with a peer still holding it.
     """
-    if deadline_ms is None and on_wait is None:
+    if fcntl is not None and deadline_ms is None and on_wait is None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         return
 
+    if fcntl is None:
+        # Windows region locks need a byte to lock; pad once (sentinels are never unlinked,
+        # so this runs at most once in the file's life).
+        _pad_sentinel(handle)
     started = time.monotonic()
     deadline = None if deadline_ms is None else started + (max(0.0, deadline_ms) / 1000.0)
     next_notice_at = _WAIT_NOTICE_GRACE_S
     while True:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            else:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             return
         except OSError as exc:
-            if exc.errno not in (errno.EWOULDBLOCK, errno.EAGAIN):
+            busy = _FCNTL_BUSY_ERRNOS if fcntl is not None else _MSVCRT_BUSY_ERRNOS
+            if exc.errno not in busy:
                 raise
         now = time.monotonic()
         if deadline is not None and now >= deadline:

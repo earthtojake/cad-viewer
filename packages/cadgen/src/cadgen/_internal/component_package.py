@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 from typing import Any, Mapping
 
+from cadgen._internal.atomic_replace import replace_atomic
 from cadgen.catalog import render_package_dir
 from cadgen._internal.generation import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
@@ -196,7 +197,7 @@ def _bbox_from_shape(shape: Any) -> dict[str, list[float]] | None:
             "min": [float(xmin), float(ymin), float(zmin)],
             "max": [float(xmax), float(ymax), float(zmax)],
         }
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP bounds reads can raise on odd shapes; a component without bounds is None
         return None
 
 
@@ -392,7 +393,7 @@ def _write_component_glb_atomic(
             linear_deflection=linear_deflection,
             angular_deflection=angular_deflection,
         )
-        os.replace(temp_path, out_glb)
+        replace_atomic(temp_path, out_glb)
     finally:
         temp_path.unlink(missing_ok=True)
     return out_glb
@@ -766,7 +767,7 @@ def build_package_from_compound(
     # and report the package unreadable.
     _descriptor_tmp = package_dir / f".{DESCRIPTOR_NAME}.tmp{os.getpid()}"
     _descriptor_tmp.write_text(json.dumps(descriptor))
-    os.replace(_descriptor_tmp, package_dir / DESCRIPTOR_NAME)
+    replace_atomic(_descriptor_tmp, package_dir / DESCRIPTOR_NAME)
     # The lazy whole-assembly topology sidecar was extracted against the
     # previous descriptor's provenance; a rewritten package makes it stale by
     # definition, so drop it and let the next selector query rebuild it.
