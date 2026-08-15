@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: cadgen
-Version: 0.4.11
+Version: 0.4.12
 Summary: STEP-first CAD artifact generation runtime: build123d STEP/GLB/topology generation, validation, and inspection for CAD agent skills.
 Author: earthtojake
 License-Expression: MIT

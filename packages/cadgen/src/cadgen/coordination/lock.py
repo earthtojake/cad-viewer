@@ -1,4 +1,4 @@
-"""POSIX advisory locking for artifact coordination.
+"""Kernel-owned file locking for artifact coordination (POSIX ``flock``, Windows ``msvcrt``).
 
 The KERNEL owns the lock state: it is released when the holding file descriptor closes,
 including when the process crashes or is killed. That is the whole reason this is a
@@ -17,9 +17,10 @@ JSON file refreshed by a 1s heartbeat thread, which had three defects a real loc
 no age windows. The kernel is the sole authority on "a run is in flight"; the run id in the
 sentinel is for ATTRIBUTING a status record to a run, never for deciding one is alive.
 
-Sentinels are never unlinked. Unlinking races: a waiter that already opened the file would
-hold a descriptor to an unlinked inode and "acquire" a lock nobody else can see. They are
-zero-to-32-byte files under gitignored ``__cadgen__``.
+Sentinels are never unlinked, and neither is the Windows mutex below. Unlinking races: a
+waiter that already opened the file would hold a descriptor to an unlinked inode and
+"acquire" a lock nobody else can see. They are zero-to-32-byte files under gitignored
+``__cadgen__``.
 
 Readers probe with ``LOCK_SH``, writers take ``LOCK_EX``. That asymmetry matters: ``flock``
 conflicts per open file description, not per process, so two concurrent ``LOCK_EX`` probes
@@ -27,14 +28,26 @@ of an UNHELD sentinel conflict with each other and one of them wrongly reports a
 flight. Measured at ~6% false positives with four threads before this was fixed.
 
 On Windows there is no ``fcntl``; :mod:`msvcrt` provides byte-range locks (``locking``)
-instead. Kernel-ownership on close behaves the same, but the model differs in two ways
-that matter: ``msvcrt.locking`` locks a byte region at the CURRENT file position (not the
-whole descriptor), and it has no shared mode -- every operation, probes included, takes an
-exclusive region lock. A sentinel therefore must hold a byte before it can be locked at
-all, and two concurrent Windows probes of the same sentinel can false-positive "held"
-(the very race the POSIX shared-probe asymmetry exists to avoid). Locking past EOF is an
-error on Windows, so an EMPTY sentinel is reported as degraded rather than held -- a
-crash between ``open()`` and stamping must not wedge every later build forever.
+instead. Kernel-ownership on close behaves the same, but the model differs in three ways
+that matter, and the third is why the Windows lock is not taken on the sentinel at all:
+
+* ``msvcrt.locking`` locks a byte region at the CURRENT file position rather than the whole
+  descriptor, and locking past EOF is an error, so the file must hold a byte to be lockable.
+* It has no shared mode -- every operation, probes included, takes an exclusive region lock,
+  so two concurrent Windows probes of one file can false-positive "held" (the very race the
+  POSIX shared-probe asymmetry above exists to avoid).
+* The lock is MANDATORY, not advisory. Holding byte 0 makes the file unreadable to every
+  other process, which broke every Windows DXF build (issue #269): the sentinel is the file
+  the Node builders must read to prove they were started by the lock holder.
+
+So on Windows the lock lives on a sibling ``.mutex`` that holds no data and that nothing
+reads, while the run id still goes to the unlocked sentinel -- see :func:`mutex_path`.
+POSIX locks the sentinel itself, because advisory locking has no such problem.
+
+That split also simplifies the empty-file rule. An empty MUTEX reads as IDLE: it is padded
+before the lock is taken, so 0 bytes means no run ever held it. The old rule had to report
+UNKNOWN for an empty sentinel instead, because a crash between ``open()`` and stamping left
+one legitimately empty, and a lock-past-EOF error must not wedge every later build forever.
 """
 
 from __future__ import annotations
@@ -67,6 +80,9 @@ except ImportError:  # pragma: no cover - not reachable on darwin/linux CI
 _FCNTL_BUSY_ERRNOS = (errno.EWOULDBLOCK, errno.EAGAIN)
 _MSVCRT_BUSY_ERRNOS = (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES)
 
+
+# Frozen: the Windows mutex sibling. Never read, never parsed -- only locked.
+MUTEX_SUFFIX = ".mutex"
 
 _HELD = threading.local()
 _RUN_ID_BYTES = 32
@@ -101,6 +117,29 @@ def locking_available() -> bool:
     return fcntl is not None or msvcrt is not None
 
 
+def mutex_path(lock_path: Path | str) -> Path:
+    """The file the LOCK is taken on, which is not always the file the run id lives in.
+
+    On POSIX they are the same file: ``flock`` is advisory, so holding it does not stop anyone
+    reading the sentinel, and the Node builders read it to prove they were started by the holder
+    (``assertWriteLock``).
+
+    Windows byte-range locks are MANDATORY. Locking byte 0 of the sentinel made it unreadable to
+    every other process for the whole build: the Node child's ``readFileSync`` got EBUSY, its
+    catch turned that into an empty string, and the run-id comparison then failed against a
+    sentinel that contained exactly the right run id (issue #269). Python's own ``read_run_id``
+    was broken the same way, so status attribution could not name the run holding the lock --
+    precisely when there is one to name.
+
+    So on Windows the mutex is a sibling file that holds no data and that nobody reads. Mutual
+    exclusion is unchanged: every participant locks the same path, whichever path that is.
+    """
+    path = Path(lock_path)
+    if fcntl is not None or msvcrt is None:
+        return path
+    return path.with_name(f"{path.name}{MUTEX_SUFFIX}")
+
+
 def _unlock(handle) -> None:
     """Release whatever backend lock ``handle`` holds; the caller owns error policy."""
     if fcntl is not None:
@@ -110,12 +149,12 @@ def _unlock(handle) -> None:
         msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def _pad_sentinel(handle) -> None:
-    """Ensure the sentinel holds at least one byte, so a Windows region lock is legal.
+def _pad_mutex(handle) -> None:
+    """Ensure the mutex file holds at least one byte, so a Windows region lock is legal.
 
-    Locking past EOF is an error on Windows, and a brand-new sentinel is 0 bytes.
-    Sentinels are never unlinked, so this pad happens at most once in the file's life and
-    writes nothing visible to ``read_run_id`` (which strips whitespace)."""
+    Locking past EOF is an error on Windows and a brand-new file is 0 bytes. This pads the
+    MUTEX, which carries no data and which nothing reads, so the byte is free of meaning --
+    unlike padding the sentinel, where a stray byte read back as a run id."""
     if handle.seek(0, os.SEEK_END) == 0:
         handle.write(b" ")
         handle.flush()
@@ -135,7 +174,7 @@ def probe(lock_path: Path | str) -> ProbeResult:
     """
     if fcntl is None and msvcrt is None:
         return ProbeResult(held=False, degraded=True)
-    path = Path(lock_path)
+    path = mutex_path(lock_path)
     try:
         handle = path.open("rb")
     except FileNotFoundError:
@@ -156,11 +195,16 @@ def probe(lock_path: Path | str) -> ProbeResult:
             else:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
                 return ProbeResult(held=False, degraded=False)
-        # Windows backend: a 1-byte EXCLUSIVE region lock (msvcrt has no shared mode).
-        # An empty sentinel cannot be locked at all (lock-past-EOF is an error), and it
-        # must read as UNKNOWN, never held: see the module docstring.
+        # Windows backend: a 1-byte EXCLUSIVE region lock (msvcrt has no shared mode) on the
+        # MUTEX sibling -- see mutex_path for why it is not the sentinel.
+        #
+        # A 0-byte mutex cannot be locked at all (lock-past-EOF is an error there) and means no
+        # holder has ever padded it, so it reads as IDLE. That is a change from the previous
+        # empty-sentinel rule, which had to report UNKNOWN because a crash between open() and
+        # stamping left a legitimately empty sentinel behind; the mutex is padded before the
+        # lock is taken, so that window does not exist here.
         if handle.seek(0, os.SEEK_END) == 0:
-            return ProbeResult(held=False, degraded=True)
+            return ProbeResult(held=False, degraded=False)
         handle.seek(0)
         try:
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
@@ -230,17 +274,28 @@ def exclusive(
         yield read_run_id(path)
         return
 
+    # On Windows the LOCK and the STAMP live in different files: the mutex is locked and never
+    # read, the sentinel is stamped and stays readable (see mutex_path). On POSIX both names
+    # resolve to the same path and this opens it once, as it always did.
+    mutex = mutex_path(path)
+    handle = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle = path.open("a+b")
+        handle = mutex.open("a+b")
+        stamp_handle = handle if mutex == path else path.open("a+b")
     except OSError:
+        # Two opens now, so the second can fail with the first already open. No lock has been
+        # taken yet, but this module closes what it opens.
+        if handle is not None:
+            with contextlib.suppress(OSError):
+                handle.close()
         yield None
         return
 
     held.add(key)
     try:
         try:
-            _acquire(handle, path, deadline_ms=deadline_ms, on_wait=on_wait)
+            _acquire(handle, mutex, deadline_ms=deadline_ms, on_wait=on_wait)
         except OSError:
             # ENOLCK/EOPNOTSUPP and friends. The old code left this call OUTSIDE its
             # try/except, so such a filesystem turned advisory coordination into a hard
@@ -250,7 +305,7 @@ def exclusive(
             yield None
             return
         recorded = (run_id or new_run_id())[:_RUN_ID_BYTES]
-        _write_run_id(handle, recorded)
+        _write_run_id(stamp_handle, recorded)
         try:
             yield recorded
         finally:
@@ -260,6 +315,9 @@ def exclusive(
         held.discard(key)
         with contextlib.suppress(OSError):
             handle.close()
+        if stamp_handle is not handle:
+            with contextlib.suppress(OSError):
+                stamp_handle.close()
 
 
 def _acquire(
@@ -288,7 +346,7 @@ def _acquire(
     if fcntl is None:
         # Windows region locks need a byte to lock; pad once (sentinels are never unlinked,
         # so this runs at most once in the file's life).
-        _pad_sentinel(handle)
+        _pad_mutex(handle)
     started = time.monotonic()
     deadline = None if deadline_ms is None else started + (max(0.0, deadline_ms) / 1000.0)
     next_notice_at = _WAIT_NOTICE_GRACE_S

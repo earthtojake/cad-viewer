@@ -205,9 +205,9 @@ class BuildRun:
     holding one -- which is how a stale record used to be rendered as live.
     """
 
-    __slots__ = ("_reporter", "contended", "run_id", "skipped")
+    __slots__ = ("_reporter", "contended", "degraded", "run_id", "skipped")
 
-    def __init__(self, reporter: Any, run_id: str | None) -> None:
+    def __init__(self, reporter: Any, run_id: str | None, *, degraded: bool = False) -> None:
         self._reporter = reporter
         self.run_id = run_id
         # Two ways to have no work to do, and a producer must handle both. ``skipped``: we
@@ -216,6 +216,17 @@ class BuildRun:
         # error; both mean "do not write the package".
         self.skipped = False
         self.contended = False
+        # We are writing WITHOUT mutual exclusion, because locking was unavailable here (a
+        # filesystem that refuses advisory locks, an unwritable __cadgen__). The build goes
+        # ahead -- a missing lock must never be the reason a user's build fails -- and
+        # ``run_id`` is still minted so progress has something to attribute itself to.
+        #
+        # A producer that hands work to a Node child MUST pass this on: the child proves it
+        # was started by the lock holder by matching its run id against the sentinel, and a
+        # degraded run never stamped one. This flag is the only way the child can tell "no
+        # lock was taken here" from "you are not the holder", which are the same empty
+        # sentinel from where it stands. See implicitjs/glb/assertWriteLock.js.
+        self.degraded = degraded
 
     def phase(self, name: str, *, total: int | None = None, detail: str = "") -> None:
         self._reporter.phase(name, total=total, detail=detail)
@@ -336,10 +347,12 @@ def artifact_build(
         return
 
     with stack:
+        # Degraded (no fcntl, unwritable dir, or a filesystem without advisory locks). Still
+        # report progress -- a bar with no mutual exclusion is better than no bar, and the
+        # reader surfaces `degraded` separately. The run carries the fact, because the minted
+        # id below is NOT in the sentinel and anything that checks it must know that.
+        degraded = run_id is None
         if run_id is None:
-            # Degraded (no fcntl, unwritable dir, or a filesystem without advisory locks).
-            # Still report progress -- a bar with no mutual exclusion is better than no bar,
-            # and the reader surfaces `degraded` separately.
             run_id = new_run_id()
 
         def _publish(outcome: str | None, event: ProgressEvent | None = None) -> None:
@@ -367,7 +380,7 @@ def artifact_build(
             phases=kind.phases,
             labels=kind.labels,
         )
-        run = BuildRun(reporter, run_id)
+        run = BuildRun(reporter, run_id, degraded=degraded)
 
         if not force and is_current is not None:
             with contextlib.suppress(Exception):
@@ -477,9 +490,10 @@ def generator_busy(
     with exclusive(
         generator_lock_path(output_dir), deadline_ms=deadline_ms, on_wait=on_wait
     ) as run_id:
+        # Degraded locking. Still report: a bar with no mutual exclusion beats no bar, and
+        # the reader surfaces `degraded` separately.
+        degraded = run_id is None
         if run_id is None:
-            # Degraded locking. Still report: a bar with no mutual exclusion beats no bar,
-            # and the reader surfaces `degraded` separately.
             run_id = new_run_id()
 
         def _publish(outcome: str | None, event: ProgressEvent | None = None) -> None:
@@ -506,7 +520,7 @@ def generator_busy(
             phases=kind.phases,
             labels=kind.labels,
         )
-        run = BuildRun(reporter, run_id)
+        run = BuildRun(reporter, run_id, degraded=degraded)
         try:
             yield run
         except BaseException:  # include KeyboardInterrupt/SystemExit: a cancelled run is a failed run

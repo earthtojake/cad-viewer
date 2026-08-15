@@ -159,7 +159,9 @@ def build_implicit_mesh(
     Its run id is handed to the child, which checks it against the lock sentinel before
     writing anything -- so ONE run id, one status record and one progress bar span both
     runtimes, and a builder started outside the lock throws (see
-    ``implicitjs/glb/assertWriteLock.js``).
+    ``implicitjs/glb/assertWriteLock.js``). A run that could not take a lock at all says so
+    with ``--lock-degraded``, so the child skips a check it cannot pass rather than turning a
+    filesystem without advisory locks into a failed build.
 
     Raises on any Node-side failure; the caller must then leave no descriptor behind.
     """
@@ -179,6 +181,10 @@ def build_implicit_mesh(
         "--resolution", str(int(resolution)),
         "--max-cells", str(int(DEFAULT_BAKE_MAX_CELLS)),
     ]
+    if bool(getattr(run, "degraded", False)):
+        # Locking was unavailable, so the run id above is minted rather than stamped and the
+        # child cannot verify it. Say so, instead of letting it read as a lock violation.
+        args += ["--lock-degraded", "1"]
     if threads is not None:
         args += ["--threads", str(int(threads))]
     if write_glb is not None:

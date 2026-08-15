@@ -73,6 +73,12 @@ function requireArg(args, name) {
   return value;
 }
 
+/** A boolean flag, written either bare (`--flag`, parsed as "true") or as `--flag 1`. */
+function parseFlag(value) {
+  const text = String(value || "").trim().toLowerCase();
+  return text === "1" || text === "true";
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const packageDir = path.resolve(requireArg(args, "package-dir"));
@@ -80,7 +86,8 @@ async function main() {
   const name = String(args.name || path.basename(packageDir) || "drawing");
 
   // Before anything is read or written: prove this process was started by the lock holder.
-  assertWriteLock(packageDir, runId);
+  // The parent sets --lock-degraded when it could not take a lock to be started by.
+  assertWriteLock(packageDir, runId, { degraded: parseFlag(args["lock-degraded"]) });
 
   reportPhase("parse");
   // fd 0 read whole: the producer writes the drawing and closes the pipe before we get here,
