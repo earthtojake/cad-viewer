@@ -202,7 +202,7 @@ class ServeDistPosixTests(unittest.TestCase):
         pathlib.Path(dist_root, "index.html").write_text("<!doctype html><title>cad</title>", encoding="utf-8")
         assets = pathlib.Path(dist_root, "assets")
         assets.mkdir()
-        (assets / "index-abc123.js").write_text("export default 1;\n", encoding="utf-8")
+        (assets / "index-abc123.js").write_bytes(b"export default 1;\n")
 
         previous = server_mod._Ctx.dist_root
         server_mod._Ctx.dist_root = dist_root
@@ -328,6 +328,10 @@ class NormalizedFileRefTests(unittest.TestCase):
     def test_a_relative_ref_is_still_relative(self):
         self.assertEqual("models/part.step", backend_mod.normalized_file_ref("models/part.step"))
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "asserts POSIX semantics, which is a claim about the HOST rather than about the\n        code under test: on Windows a leading-slash path really is drive-relative, so\n        D:/Users/... is the right answer there, not a regression.",
+    )
     def test_a_posix_absolute_ref_is_unchanged(self):
         self.assertEqual("/Users/me/models/part.step", backend_mod.normalized_file_ref("/Users/me/models/part.step"))
 
@@ -351,6 +355,10 @@ class ViewerUrlTests(unittest.TestCase):
         # which is not a URL at all.
         self.assertEqual("http://127.0.0.1:3245/D:/some/project", url)
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "asserts POSIX semantics, which is a claim about the HOST rather than about the\n        code under test: on Windows a leading-slash path really is drive-relative, so\n        D:/Users/... is the right answer there, not a regression.",
+    )
     def test_a_posix_directory_is_unchanged(self):
         with _as_posix():
             self.assertEqual(

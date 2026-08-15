@@ -17,9 +17,19 @@ Deliberately narrow:
 * only ``WinError 32`` retries. A denial (5) or a missing directory is a real error and must
   surface at once, not 350 ms later.
 * the attribute does not exist off Windows, so this is exactly ``os.replace`` on POSIX.
-* four attempts over 350 ms, then the original error propagates. A rename that cannot win in
+* five attempts over 750 ms, then the original error propagates. A rename that cannot win in
   that window is not a deferred close, and a build that hangs retrying is worse than one that
   says what happened.
+
+The window is sized for the TAIL, not the median, and that distinction is the whole of issue
+#274. 350 ms looked generous per rename and was: measured on a Synology SMB share over two
+84-component builds, 126 of 168 renames blocked at all, median 31 ms, p90 118 ms -- and max
+389 ms, just past the old budget. But the budget is spent per rename while the BUILD only
+succeeds if every rename wins, and a large assembly draws from that distribution a hundred-odd
+times. At 168 renames even a 1% per-rename loss rate leaves roughly a 1-in-5 chance of a clean
+build, which is what the reporter saw: 1 of 3 runs completing, each failure on a different
+component. Widening costs the common case nothing, because a 31 ms median still wins on the
+first or second retry.
 """
 
 from __future__ import annotations
@@ -31,7 +41,7 @@ from pathlib import Path
 # ERROR_SHARING_VIOLATION: the file is open in another process -- or, on SMB, was open a moment
 # ago and the server has not caught up.
 WINDOWS_SHARING_VIOLATION = 32
-RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.2)
+RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.2, 0.4)
 
 
 def replace_atomic(temp_path: Path | str, target_path: Path | str) -> None:

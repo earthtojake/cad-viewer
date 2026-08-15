@@ -6,7 +6,6 @@ unsupported, the owns_entry gate, and the generation-lock reader.
 """
 
 import ast
-import fcntl
 import inspect
 import hashlib
 import json
@@ -18,6 +17,11 @@ import sys
 import tempfile
 import threading
 import time
+
+try:
+    import fcntl
+except ImportError:  # Windows -- see GenerationLock, which is the only user.
+    fcntl = None
 import unittest
 from unittest import mock
 
@@ -309,6 +313,13 @@ class BakeHashGate(unittest.TestCase):
             )
 
 
+@unittest.skipIf(
+    fcntl is None,
+    "these drive raw fcntl.flock, which is the POSIX backend specifically. The Windows "
+    "backend's equivalent cross-process coverage lives in "
+    "tests/python/packages/cadgen/test_coordination_lock.py::RealBackendRegressionTests, "
+    "which runs on whatever platform it finds.",
+)
 class GenerationLock(unittest.TestCase):
     """The snapshot reports what the kernel says. There is no pid, heartbeat, or age to
     fake, so these drive the real fcntl states — including from a separate process,

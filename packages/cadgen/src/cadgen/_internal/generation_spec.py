@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import replace
 import math
+import os
 from pathlib import Path
 import sys
 from typing import Sequence
@@ -108,7 +109,19 @@ def _resolve_cli_output_path(
     value = str(raw_output).strip()
     if not value:
         raise ValueError(f"{tool_name} {option_label} must be a non-empty path")
-    if "\\" in value:
+    # A backslash is the native separator on Windows and a legal FILENAME character on POSIX,
+    # so this guard has to be platform-specific. On POSIX it catches a Windows-shaped path
+    # typed on the wrong machine, which would otherwise silently create a file named
+    # ``C:\out.step`` in the working directory. On Windows it must not fire at all: this is a
+    # path the user typed for their own filesystem, and ``str(Path(...))`` produces
+    # backslashes there, so the absolute rule rejected EVERY native path given to --output or
+    # to a SOURCE=OUTPUT target.
+    #
+    # The same wording in ``cadgen.metadata`` is absolute on purpose and must stay that way:
+    # that one validates a path written into a checked-in ``gen_step()`` envelope, which is
+    # read on every platform, so POSIX separators are the portable form there. One rule is
+    # about a user's disk, the other about a file in the repository.
+    if os.name != "nt" and "\\" in value:
         raise ValueError(f"{tool_name} {option_label} must use POSIX '/' separators")
     output_path = Path(value).expanduser()
     resolved = output_path.resolve() if output_path.is_absolute() else (Path.cwd() / output_path).resolve()
