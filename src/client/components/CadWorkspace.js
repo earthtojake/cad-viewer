@@ -143,6 +143,7 @@ import {
   entryHasDxf,
   entryHasImplicitCad,
   entryHasMesh,
+  entryIsDrawingDocument,
   entryHasReferences,
   entryHasUrdf,
   entryMeshAssetSignature,
@@ -1603,6 +1604,8 @@ export default function CadWorkspace({
   const selectedEntryHasDisplayEdges = entryHasDisplayEdges(selectedEntry);
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
   const selectedEntryHasImplicit = entryHasImplicitCad(selectedEntry);
+  // A dimensioned drawing renders its own 2D geometry: there is no mesh to wait for.
+  const selectedEntryIsDrawingDocument = entryIsDrawingDocument(selectedEntry);
   // The selected entry's render artifact is (re)building -> show the loading state. Replaces the
   // old !entryHasMesh + buildable-code derivation.
   const selectedStepArtifactRenderPending = selectedArtifactGenerating;
@@ -3086,6 +3089,9 @@ export default function CadWorkspace({
     selectedArtifact.status === "error";
   const meshViewerLoading =
     !!selectedEntry &&
+    // A DRAWING has no flat pattern and bakes nothing, so "no mesh yet" is its finished state,
+    // not a pending one. Waiting on the mesh path left the pane on LOADING forever (issue #246).
+    !selectedEntryIsDrawingDocument &&
     (selectedStepArtifactRenderPending || !artifactBlocksRender) &&
     status !== ASSET_STATUS.ERROR &&
     (!selectedMeshMatches || status === ASSET_STATUS.LOADING || selectedStepModuleLoading);
@@ -8444,6 +8450,7 @@ export default function CadWorkspace({
           drawingOrientation={selectedEntryIsDrawing ? drawingOrientation : null}
           drawingMaterialColor={selectedEntryIsDrawing ? dxfMaterialPreset(drawingMaterial).colorHex : null}
           drawingGeometry={selectedEntryIsDrawing ? drawingGeometry : null}
+          drawingIsDocument={selectedEntryIsDrawingDocument}
           drawingThicknessMm={selectedEntryIsDrawing ? drawingThicknessMm : 0}
           onCameraZoomPercentChange={setViewerZoomPercent}
           renderPartsIndividually={isUrdfView || Boolean(selectedStepParameterRuntime)}

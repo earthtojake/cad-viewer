@@ -13,6 +13,7 @@ import {
   transformDxfPreviewPositions
 } from "cadjs/lib/dxf/foldPreview";
 import { buildDxfPreviewMeshData, extractDxfScorePolylines } from "cadjs/lib/dxf/buildPreviewMesh";
+import { buildDxfDrawingLineGroups, drawingLineBounds } from "cadjs/lib/dxf/buildDrawingLines";
 import { STEP_TREE_TOPOLOGY_NODE_PREFIX } from "cadjs/lib/step/stepTree";
 import { copyImageBlobToClipboard } from "@/ui/clipboard";
 import { triggerBlobDownload } from "@/ui/download";
@@ -1752,6 +1753,7 @@ const CadViewer = forwardRef(function CadViewer({
   drawingOrientation = null,
   drawingMaterialColor = null,
   drawingGeometry = null,
+  drawingIsDocument = false,
   drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
   perspective = null,
@@ -2850,6 +2852,104 @@ const CadViewer = forwardRef(function CadViewer({
   // DRAWING TRANSFORM: thickness and fold, one vertex rewrite, math from
   // cadjs/lib/dxf/foldPreview (node-tested; the snapshot runtime shares it by construction).
   //
+  // A dimensioned DRAWING renders as LINES, because that is what it is.
+  //
+  // A cut layout's closed contours get extruded into a flat pattern and drawn as a solid. A
+  // drawing -- plan views, sections, centre lines, a title block -- encloses nothing, so it has
+  // no flat pattern, bakes no preview.glb, and used to sit on LOADING forever waiting for a mesh
+  // that was never coming (issue #246). Its geometry.json is already everything needed to draw
+  // it, so it is drawn here: one LineSegments per layer, coloured from the layer table and
+  // hidden by the same layer switches a cut layout uses.
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    const group = runtime?.modelGroup;
+    const previous = runtime?.dxfDrawingLines || null;
+    const dispose = () => {
+      if (!previous) {
+        return;
+      }
+      previous.parent?.remove(previous);
+      for (const child of previous.children || []) {
+        child.geometry?.dispose?.();
+        child.material?.dispose?.();
+      }
+      if (runtime) {
+        runtime.dxfDrawingLines = null;
+      }
+    };
+    if (!group || !drawingIsDocument || !drawingGeometry?.geometry) {
+      dispose();
+      return undefined;
+    }
+    dispose();
+    const hiddenLayers = new Set(Array.isArray(drawingHiddenLayers) ? drawingHiddenLayers : []);
+    // ACI 7 is the DXF "default ink" colour: it means "whatever reads against the background",
+    // which is why the package resolves it to a near-white grey suited to a dark sheet. Taking
+    // that literally paints a drawing invisible on a light theme, so only a layer that names a
+    // real colour gets its own; the rest use the same slate the bend guides use, which reads on
+    // both themes.
+    const DEFAULT_INK = 0x5f6775;
+    const layerColors = new Map(
+      (Array.isArray(drawingGeometry.layers) ? drawingGeometry.layers : [])
+        .map((layer) => [layer?.name, Number(layer?.colorAci) === 7 ? null : layer?.colorHex])
+    );
+    const { layers } = buildDxfDrawingLineGroups(drawingGeometry);
+    if (!layers.length) {
+      return undefined;
+    }
+    const container = new THREE.Group();
+    container.userData.dxfDrawingLines = true;
+    for (const layer of layers) {
+      if (hiddenLayers.has(layer.name)) {
+        continue;
+      }
+      // Mesher space is y-up; the scene is CAD Z-up. Same (x, y, z) -> (x, z, -y) map the
+      // curved fold preview uses, so a drawing and a flat pattern share one orientation,
+      // one camera fit and one set of view controls.
+      const source = layer.positions;
+      const mapped = new Float32Array(source.length);
+      for (let index = 0; index < source.length; index += 3) {
+        mapped[index] = source[index];
+        mapped[index + 1] = source[index + 2];
+        mapped[index + 2] = -source[index + 1];
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(mapped, 3));
+      const color = layerColors.get(layer.name);
+      const lines = new THREE.LineSegments(
+        geometry,
+        new THREE.LineBasicMaterial({
+          color: typeof color === "string" && color ? new THREE.Color(color) : new THREE.Color(DEFAULT_INK),
+          transparent: false
+        })
+      );
+      lines.userData.dxfDrawingLayer = layer.name;
+      container.add(lines);
+    }
+    group.add(container);
+    if (runtime) {
+      runtime.dxfDrawingLines = container;
+    }
+    // A document has no mesh for the shared fit to measure, so its own extent stands in.
+    // Publishing runtime.modelBounds is how implicits get the shared zoom baseline, reset and
+    // fit with no format-specific branch (see handleImplicitModelBounds); a drawing joins the
+    // same path rather than growing a second one.
+    const meshBounds = drawingLineBounds({ layers });
+    const bounds = meshBounds
+      ? {
+        min: [meshBounds.min[0], meshBounds.min[2], -meshBounds.max[1]],
+        max: [meshBounds.max[0], meshBounds.max[2], -meshBounds.min[1]]
+      }
+      : null;
+    if (bounds && runtime?.THREE) {
+      applyRuntimeModelBounds(runtime.THREE, runtime, bounds, sceneScaleModeRef.current);
+      runtime.hasVisibleModel = true;
+      resetZoomAndPan({ animate: false });
+    }
+    runtime?.requestRender?.();
+    return undefined;
+  }, [drawingIsDocument, drawingGeometry, drawingHiddenLayers, viewerReadyTick]);
+
   // Applied SYNCHRONOUSLY when the meshes already exist. The previous version restored flat
   // positions in its cleanup and re-folded on the next animation frame — so every slider
   // tick painted one flat frame between the two, which is the flicker. Cleanup now only

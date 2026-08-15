@@ -90,6 +90,24 @@ export function isViewerReleaseMajorMinorNewer(currentVersion = "", candidateVer
   return candidate.parts[0] > current.parts[0] || candidate.parts[1] > current.parts[1];
 }
 
+/** Whether a newer release is worth PROMPTING about, rather than merely noting.
+ *
+ * Two thresholds exist because the top bar has two registers: any newer release reveals the
+ * latest version quietly, while this one turns the version chip into an "Update" button.
+ *
+ * That prompt used to require a MAJOR or MINOR release, on the reasoning that a patch is not
+ * worth interrupting anyone for. It is, at the current cadence: 0.4.7 through 0.4.10 shipped
+ * inside three days and carried the Windows path fix, the SMB rename retry, the drawing rules
+ * and the multi-bend fold -- fixes a user hitting those bugs has no way to learn about from a
+ * quiet version number. So patches prompt too, for now.
+ *
+ * This is the one place that policy lives: restoring the old behaviour means calling
+ * `isViewerReleaseMajorMinorNewer` here instead, and nothing else changes.
+ */
+export function isViewerReleaseUpdateSuggested(currentVersion = "", candidateVersion = "") {
+  return isViewerReleaseNewer(currentVersion, candidateVersion);
+}
+
 export function normalizeViewerSkillsInstallCommand(
   value = "",
   fallback = DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND

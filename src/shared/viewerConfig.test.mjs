@@ -7,6 +7,7 @@ import {
   DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND,
   isViewerReleaseMajorMinorNewer,
   isViewerReleaseNewer,
+  isViewerReleaseUpdateSuggested,
   normalizeViewerDefaultFile,
   normalizeViewerDiscordUrl,
   normalizeViewerGithubUrl,
@@ -106,6 +107,23 @@ test("isViewerReleaseMajorMinorNewer ignores patch-only releases", () => {
   assert.equal(isViewerReleaseMajorMinorNewer("0.2.0-beta.1", "0.2.0"), false);
   assert.equal(isViewerReleaseMajorMinorNewer("0.2.0", "0.2.1"), false);
   assert.equal(isViewerReleaseMajorMinorNewer("0.2.0", "0.1.99"), false);
+});
+
+test("a patch release is worth prompting about, at this cadence", () => {
+  // The prompt turns the version chip into an "Update" button. It used to require a major or
+  // minor release; patches now qualify too, because that is where the fixes have been shipping.
+  assert.equal(isViewerReleaseUpdateSuggested("0.4.9", "0.4.10"), true);
+  assert.equal(isViewerReleaseUpdateSuggested("0.4.10", "0.5.0"), true);
+  assert.equal(isViewerReleaseUpdateSuggested("0.4.10", "1.0.0"), true);
+  // Same version, older version, and an unparseable tag must never prompt.
+  assert.equal(isViewerReleaseUpdateSuggested("0.4.10", "0.4.10"), false);
+  assert.equal(isViewerReleaseUpdateSuggested("0.4.10", "0.4.9"), false);
+  assert.equal(isViewerReleaseUpdateSuggested("0.4.10", "latest"), false);
+  // A prerelease of the version you already run is not an upgrade.
+  assert.equal(isViewerReleaseUpdateSuggested("0.2.0", "0.2.0-beta.1"), false);
+  // The narrower rule still exists, and still ignores patches -- restoring it is a one-line
+  // change inside the policy function.
+  assert.equal(isViewerReleaseMajorMinorNewer("0.4.9", "0.4.10"), false);
 });
 
 test("normalizeViewerSkillsInstallCommand accepts only skills install commands", () => {

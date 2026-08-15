@@ -140,7 +140,7 @@ def layer_table_intents(document: object) -> dict[str, str]:
     intents: dict[str, str] = {}
     try:
         layers = list(document.layers)
-    except Exception:
+    except Exception:  # noqa: BLE001 - a document with no readable layer table simply declares no intents
         return intents
     for layer in layers:
         name = str(getattr(getattr(layer, "dxf", None), "name", "") or "").strip()
@@ -167,14 +167,14 @@ def drawing_apparatus(document: object) -> dict[str, int]:
                 counts["dimensions"] += 1
             elif kind == "VIEWPORT":
                 counts["viewports"] += 1
-    except Exception:
+    except Exception:  # noqa: BLE001 - ezdxf entity reads can raise per entity; a partial count still classifies
         pass
     try:
         for layout in document.layouts:
             if layout.name.lower() == "model":
                 continue
             counts["paperspace_entities"] += sum(1 for _ in layout)
-    except Exception:
+    except Exception:  # noqa: BLE001 - same, for layouts: an unreadable layout contributes nothing
         pass
     return counts
 

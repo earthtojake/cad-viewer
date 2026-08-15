@@ -51,6 +51,8 @@ src/cadgen/_internal/component_package.py
 src/cadgen/_internal/drawing_package.py
 src/cadgen/_internal/file_metadata.py
 src/cadgen/_internal/generation.py
+src/cadgen/_internal/generation_runner.py
+src/cadgen/_internal/generation_spec.py
 src/cadgen/_internal/glb.py
 src/cadgen/_internal/glb_mesh_payload.py
 src/cadgen/_internal/glb_topology.py
@@ -64,6 +66,12 @@ src/cadgen/_internal/source_hash.py
 src/cadgen/_internal/step_hash.py
 src/cadgen/_internal/step_metadata.py
 src/cadgen/_internal/step_scene.py
+src/cadgen/_internal/step_scene_cache.py
+src/cadgen/_internal/step_scene_geometry.py
+src/cadgen/_internal/step_scene_loader.py
+src/cadgen/_internal/step_scene_mesh.py
+src/cadgen/_internal/step_scene_selectors.py
+src/cadgen/_internal/step_scene_types.py
 src/cadgen/_internal/stl.py
 src/cadgen/_internal/threemf.py
 src/cadgen/_internal/validators.py

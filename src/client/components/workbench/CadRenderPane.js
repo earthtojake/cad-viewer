@@ -285,6 +285,7 @@ export default function CadRenderPane({
   drawingOrientation = null,
   drawingMaterialColor = null,
   drawingGeometry = null,
+  drawingIsDocument = false,
   drawingThicknessMm = 0,
   onCameraZoomPercentChange = null,
   viewPlaneOffsetRight = 16,
@@ -511,6 +512,7 @@ export default function CadRenderPane({
         drawingOrientation={drawingOrientation}
         drawingMaterialColor={drawingMaterialColor}
         drawingGeometry={drawingGeometry}
+        drawingIsDocument={drawingIsDocument}
         drawingThicknessMm={drawingThicknessMm}
         onCameraZoomPercentChange={onCameraZoomPercentChange}
         perspective={viewerPerspective}

@@ -11,8 +11,8 @@ import {
 import EntryIcon from "./EntryIcon";
 import {
   DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND,
-  isViewerReleaseMajorMinorNewer,
   isViewerReleaseNewer,
+  isViewerReleaseUpdateSuggested,
   viewerGithubLatestReleaseApiUrl,
   viewerGithubLatestReleaseUrl,
   normalizeViewerDiscordUrl,
@@ -711,7 +711,7 @@ function latestReleaseCheckState(currentVersion, release) {
   const latestReleaseNewer = isViewerReleaseNewer(currentVersion, latestVersion);
 
   return {
-    updateAvailable: isViewerReleaseMajorMinorNewer(currentVersion, latestVersion),
+    updateAvailable: isViewerReleaseUpdateSuggested(currentVersion, latestVersion),
     latestVersion,
     releaseUrl,
     installCommand,
