@@ -58,6 +58,7 @@ import os
 import threading
 import time
 import uuid
+import warnings
 from pathlib import Path
 from typing import Callable, Iterator, NamedTuple
 
@@ -77,8 +78,28 @@ except ImportError:  # pragma: no cover - not reachable on darwin/linux CI
 # EWOULDBLOCK/EAGAIN for a contended LOCK_NB; Windows msvcrt raises EACCES instead. Folding
 # EACCES into the POSIX set would misread one of flock's "the filesystem refused this"
 # errors as contention, so the sets stay separate.
+#
+# EDEADLOCK is the one that matters and the one that was missing. The Windows CRT's
+# ``_locking`` reports a region already held by another handle as EDEADLOCK -- errno 36,
+# "Resource deadlock avoided" -- not as EACCES, whatever the mode. An errno that is not
+# recognised as contention falls through to the degradation branch in ``exclusive()``, so
+# the loser of a race did not wait for the winner: it carried on with NO LOCK AT ALL, and
+# said nothing. That is the opposite of what a lock is for, and it only happened under real
+# contention, so it stayed invisible while every uncontended build looked fine.
+#
+# By NUMBER, not by name. ``errno.EDEADLOCK`` does not exist on POSIX, so resolving it by name
+# would drop it exactly where the Windows backend is exercised by its fake -- leaving the fix
+# untestable off Windows, which is the situation that let the bug live in the first place.
+# 36 is EDEADLOCK on Windows and is not a POSIX errno, so naming it costs nothing here.
+WINDOWS_LOCK_CONTENTION_ERRNO = getattr(errno, "EDEADLOCK", 36)
+
 _FCNTL_BUSY_ERRNOS = (errno.EWOULDBLOCK, errno.EAGAIN)
-_MSVCRT_BUSY_ERRNOS = (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES)
+_MSVCRT_BUSY_ERRNOS = (
+    errno.EWOULDBLOCK,
+    errno.EAGAIN,
+    errno.EACCES,
+    WINDOWS_LOCK_CONTENTION_ERRNO,
+)
 
 
 # Frozen: the Windows mutex sibling. Never read, never parsed -- only locked.
@@ -159,6 +180,25 @@ def _pad_mutex(handle) -> None:
         handle.write(b" ")
         handle.flush()
     handle.seek(0)
+
+
+def _warn_degraded(lock_path: Path, error: OSError) -> None:
+    """Announce that a build is proceeding without mutual exclusion, and why.
+
+    Warned rather than raised, because the policy this module has always stated is that a
+    missing lock must never be the reason a user's build fails. But it must not be a secret
+    either: a caller that hits this is writing an artifact directory that a peer may be
+    writing too, and the errno is the only clue to whether that is a filesystem which cannot
+    lock or a backend whose contention errno we failed to recognise.
+    """
+    name = errno.errorcode.get(getattr(error, "errno", None), str(getattr(error, "errno", "?")))
+    with contextlib.suppress(Exception):
+        warnings.warn(
+            f"generation lock unavailable for {lock_path}: {name} ({error}). This build is "
+            "not serialized against concurrent writers of the same artifact.",
+            RuntimeWarning,
+            stacklevel=4,
+        )
 
 
 def new_run_id() -> str:
@@ -296,12 +336,20 @@ def exclusive(
     try:
         try:
             _acquire(handle, mutex, deadline_ms=deadline_ms, on_wait=on_wait)
-        except OSError:
+        except OSError as error:
             # ENOLCK/EOPNOTSUPP and friends. The old code left this call OUTSIDE its
             # try/except, so such a filesystem turned advisory coordination into a hard
             # build failure. Degrade instead -- which is what the policy always claimed.
             # Contended is a RuntimeError, so a bounded acquire's timeout passes straight
             # through here to the caller rather than being swallowed as a degradation.
+            #
+            # SAY SO. This branch means the body is about to run with no mutual exclusion,
+            # and it stayed silent for every unrecognised errno -- which is how a missing
+            # EDEADLOCK turned Windows contention into four concurrent writers that no log,
+            # no message and no test could explain. A warning cannot make the degradation
+            # safe, but it makes the next unrecognised errno name itself instead of looking
+            # like a lock that simply did not work.
+            _warn_degraded(path, error)
             yield None
             return
         recorded = (run_id or new_run_id())[:_RUN_ID_BYTES]

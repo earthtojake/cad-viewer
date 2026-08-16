@@ -5,6 +5,7 @@ src/cadgen/__init__.py
 src/cadgen/analysis.py
 src/cadgen/api.py
 src/cadgen/assembly.py
+src/cadgen/assembly_lookup.py
 src/cadgen/cad_ref_syntax.py
 src/cadgen/catalog.py
 src/cadgen/cli_logging.py

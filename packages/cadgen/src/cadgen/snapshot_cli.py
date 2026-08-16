@@ -802,7 +802,13 @@ def artifact_selector_index(artifact: StepTopologyArtifact | None) -> lookup.Sel
     if manifest is None:
         return None
     buffers = selector_bundle.buffers if isinstance(selector_bundle.buffers, Mapping) else None
-    return lookup.build_selector_index(manifest, buffers=buffers)
+    index = lookup.build_selector_index(manifest, buffers=buffers)
+    # The bundle is extracted from the COMPOSED compound, which has no instance tree, so it
+    # describes even a 160-part assembly as one occurrence -- and `--focus`/`--hide` rejected
+    # every ref `--mode list` had just handed out. See `cadgen.assembly_lookup`.
+    from cadgen.assembly_lookup import index_with_assembly_occurrences
+
+    return index_with_assembly_occurrences(index, artifact)
 
 
 def validate_occurrence_selector(selector: str, *, selector_index: lookup.SelectorIndex | None, source_label: str) -> None:
