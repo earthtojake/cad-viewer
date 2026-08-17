@@ -13,13 +13,14 @@ assembly manifest from the package at read time (see the design doc, sec. 6/8).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from cadgen._internal.atomic_replace import replace_atomic
+from cadgen._internal.atomic_replace import replace_atomic, temp_suffix
 from cadgen.catalog import render_package_dir
 from cadgen._internal.generation import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
@@ -384,7 +385,7 @@ def _write_component_glb_atomic(
     """Build to a sibling temp file and rename into place, so a killed build
     never leaves a truncated ``<cid>.glb`` that a later run would trust as a
     valid content-addressed cache hit."""
-    temp_path = out_glb.with_name(f"{out_glb.name}.tmp{os.getpid()}")
+    temp_path = out_glb.with_name(f"{out_glb.name}{temp_suffix()}")
     try:
         build_component_glb_from_shape(
             shape,
@@ -392,10 +393,14 @@ def _write_component_glb_atomic(
             cad_ref=cad_ref,
             linear_deflection=linear_deflection,
             angular_deflection=angular_deflection,
+            identity_path=out_glb,
         )
         replace_atomic(temp_path, out_glb)
     finally:
-        temp_path.unlink(missing_ok=True)
+        # The handle that blocks a rename blocks the delete too; letting that escape would
+        # replace the real failure with a cleanup error.
+        with contextlib.suppress(OSError):
+            temp_path.unlink(missing_ok=True)
     return out_glb
 
 
@@ -406,6 +411,7 @@ def build_component_glb_from_shape(
     cad_ref: str,
     linear_deflection: float,
     angular_deflection: float,
+    identity_path: Path | None = None,
 ) -> Path:
     """Mesh an in-memory part shape (in its local frame) to a *clean* component GLB.
 
@@ -413,9 +419,21 @@ def build_component_glb_from_shape(
     disk), so it is meshed and selector-extracted directly from the shape. The embedded
     STEP_TOPOLOGY is stripped of all source provenance (see ``COMPONENT_PROVENANCE_KEYS``)
     so the component is a pure function of geometry + mesh tolerances — byte-deterministic
-    and content-addressable. Provenance lives on the per-model descriptor, not the leaf."""
+    and content-addressable. Provenance lives on the per-model descriptor, not the leaf.
+
+    ``identity_path`` is the path the artifact will have once it is in place, for callers
+    that write through a staging file. The synthetic STEP name derived below reaches the
+    embedded manifest as ``faceProxy.source``, so naming the staging file instead would
+    put that name in the payload and make the bytes depend on where a build staged them
+    rather than on the geometry."""
     out_glb.parent.mkdir(parents=True, exist_ok=True)
-    placeholder = out_glb.with_suffix(".step")
+    # Appended to the name rather than substituted into it, which keeps the placeholder
+    # byte-identical to the one a sibling temp file used to reduce to: `<cid>.glb.tmp<pid>`
+    # has `.tmp<pid>` as its last suffix, so with_suffix() yielded `<cid>.glb.step`.
+    # Substituting reads better but would rewrite every component GLB and invalidate the
+    # content-addressed caches keyed on them, which is a separate change.
+    identity = identity_path or out_glb
+    placeholder = identity.with_name(f"{identity.name}.step")
     # The shape arrives LOCATED (the occurrence is ``part.moved(transform)``). Strip the location
     # so the GLB is emitted in the part's LOCAL frame with an identity node: world placement is
     # supplied solely by the descriptor occurrence transform, and content-addressed dedup needs
@@ -765,7 +783,7 @@ def build_package_from_compound(
     # Atomic: a reader polling this package must never observe a truncated descriptor.
     # write_text() truncates in place, so a concurrent status read could see half a file
     # and report the package unreadable.
-    _descriptor_tmp = package_dir / f".{DESCRIPTOR_NAME}.tmp{os.getpid()}"
+    _descriptor_tmp = package_dir / f".{DESCRIPTOR_NAME}{temp_suffix()}"
     _descriptor_tmp.write_text(json.dumps(descriptor))
     replace_atomic(_descriptor_tmp, package_dir / DESCRIPTOR_NAME)
     # The lazy whole-assembly topology sidecar was extracted against the

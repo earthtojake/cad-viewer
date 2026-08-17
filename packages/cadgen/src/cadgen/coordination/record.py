@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 # Stdlib-only, like everything this module touches: the viewer's server imports it.
-from cadgen._internal.atomic_replace import replace_atomic
+from cadgen._internal.atomic_replace import replace_atomic, temp_suffix
 
 SCHEMA_VERSION = 3
 
@@ -99,7 +99,7 @@ def write_record(path: Path | str, record: Mapping[str, Any]) -> bool:
     reported", never to a failed build.
     """
     target = Path(path)
-    temp_path = target.with_name(f"{target.name}.tmp{os.getpid()}")
+    temp_path = target.with_name(f"{target.name}{temp_suffix()}")
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         temp_path.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")

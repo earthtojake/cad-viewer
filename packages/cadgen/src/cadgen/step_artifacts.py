@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Iterator
 
-from cadgen._internal.atomic_replace import replace_atomic
+from cadgen._internal.atomic_replace import replace_atomic, temp_suffix
 from cadgen.catalog import source_from_path
 from cadgen.cli_logging import CliLogger
 from cadgen.coordination import (
@@ -429,7 +429,7 @@ def _write_topology_sidecar(
     if not is_assembly_package(package_dir):
         return
     target = assembly_topology_glb_path(spec.entry_path)
-    temp_path = target.with_name(f"{target.name}.tmp{os.getpid()}")
+    temp_path = target.with_name(f"{target.name}{temp_suffix()}")
     try:
         from cadgen._internal.glb import export_assembly_glb_from_scene
 
@@ -446,7 +446,10 @@ def _write_topology_sidecar(
         if logger is not None:
             logger.debug(f"topology.glb cache write skipped for {spec.cad_ref}: {exc}")
     finally:
-        temp_path.unlink(missing_ok=True)
+        # The handle that blocks a rename blocks the delete too; letting that escape would
+        # replace the real failure with a cleanup error.
+        with contextlib.suppress(OSError):
+            temp_path.unlink(missing_ok=True)
 
 
 def _scene_for_regeneration(
