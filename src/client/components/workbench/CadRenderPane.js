@@ -530,7 +530,7 @@ export default function CadRenderPane({
         compactViewPlane={false}
         viewportFrameInsets={viewportFrameInsets}
         isLoading={viewerLoading}
-        pickMode={!hasTopology && !hasParts
+        pickMode={!hasTopology && !hasParts && !measureModeActive
           ? VIEWER_PICK_MODE.NONE
           : viewerPickModeForRenderPane({
             panToolActive,
@@ -582,6 +582,7 @@ export default function CadRenderPane({
         activeMeasurementId={activeMeasurementId}
         measureState={measureState}
         measureModeActive={measureModeActive}
+        allowMeshVertexSnap={!hasTopology}
         onViewerAlertChange={handleViewerAlertChange}
         onStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
         urdfPosePicker={urdfPosePicker}

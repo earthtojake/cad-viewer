@@ -245,7 +245,7 @@ import {
   shouldDeferFileParamSelection,
   writeCadParam,
 } from "@/workbench/sidebar";
-import { buildCadRefToken } from "cadjs/lib/cadRefs.js";
+import { buildCadRefToken, isNativeCadSelector } from "cadjs/lib/cadRefs.js";
 import {
   applyUrdfPoseToMeshData,
   buildDefaultUrdfJointValues,
@@ -426,11 +426,9 @@ function stepTreeNodeIdForWorkspace(node) {
   return String(node?.id || node?.occurrenceId || "").trim();
 }
 
-const NATIVE_CAD_SELECTOR_RE = /^(?:o\d+(?:\.\d+)*(?:\.[sfev]\d+)?|[sfev]\d+|m\d+)$/i;
-
 function nativeCadSelectorCandidate(value) {
   const selector = String(value || "").trim();
-  return NATIVE_CAD_SELECTOR_RE.test(selector) ? selector : "";
+  return isNativeCadSelector(selector) ? selector : "";
 }
 
 function selectorFromStepTreeInternalId(value) {
@@ -1547,9 +1545,7 @@ export default function CadWorkspace({
     ? selectedEntrySourceFormat
     : entryRenderAssetFormat(selectedEntry);
   const selectedFileSheetKind = fileSheetKindForEntry(selectedEntry);
-  // Some kinds (e.g. a mesh/STL) have no file-specific sections; when so, hide
-  // the file-sheet toggle and the sheet entirely instead of showing an empty
-  // sidebar.
+  // Hide the file-sheet toggle when the kind has no sections.
   const selectedFileSheetHasSections = useMemo(
     () => renderedFileSheetSectionIds(selectedFileSheetKind).length > 0,
     [selectedFileSheetKind]
@@ -1568,11 +1564,11 @@ export default function CadWorkspace({
   const fileLinkCopyAvailable = false;
   // `isStepView` used to stand in for all four of these at once, which is why adding a
   // format meant auditing every one of its ~15 uses to work out which sense was meant.
-  // They are separate capabilities; today only STEP declares them, and that is a fact
-  // about the table rather than about this file.
+  // They are separate capabilities; the table is the source of truth.
   const selectedEntryContentKind = viewportContentKind(selectedEntrySourceFormat);
   const supportsParts = hasCapability(selectedEntrySourceFormat, "parts");
   const supportsTopology = hasCapability(selectedEntrySourceFormat, "topology");
+  const supportsMeasure = hasCapability(selectedEntrySourceFormat, "measure");
   const supportsDisplayModes = hasCapability(selectedEntrySourceFormat, "displayModes");
   const supportsSidecarParams =
     parameterSourceKind(selectedEntrySourceFormat) === PARAMETER_SOURCE.SIDECAR;
@@ -5241,10 +5237,9 @@ export default function CadWorkspace({
     viewerPickableEdges.length ||
     viewerPickableVertices.length
   );
-  // Measuring needs a mesh to hit, not loaded topology: an assembly measures
-  // across its parts straight away, and topology — once a component is expanded
-  // — upgrades those hits from free points to edge and face snaps.
-  const measureModeActive = supportsTopology &&
+  // Measuring needs a mesh to hit. Topology, when loaded, upgrades STEP hits
+  // from free points to edge and face snaps.
+  const measureModeActive = supportsMeasure &&
     tabToolMode === TAB_TOOL_MODE.MEASURE &&
     Boolean(selectedMeshData) &&
     !viewerLoading;
@@ -5310,7 +5305,7 @@ export default function CadWorkspace({
     ));
   }, [measureMeasurements, renderedSelectedFileSheetSectionIds, setTabToolsOpen]);
 
-  const measureToolDisabled = viewerLoading || !selectedMeshData || !supportsTopology;
+  const measureToolDisabled = viewerLoading || !selectedMeshData || !supportsMeasure;
   const topologySelectionActive =
     (isAssemblyView && requestedStepTreeTopologyNodeIds.length > 0) ||
     topLevelReferenceSelectionActive;
@@ -8895,6 +8890,12 @@ export default function CadWorkspace({
                 themeTabs={themeTabs}
                 openSectionIds={effectiveFileSheetOpenSectionIds}
                 onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
+                measurements={measureMeasurements}
+                activeMeasurementId={activeMeasureId}
+                measureModeActive={measureModeActive}
+                onMeasurementActivate={setActiveMeasureId}
+                onMeasurementDelete={handleMeasureDelete}
+                onMeasurementsClear={handleMeasureClear}
               />
             ) : null}
 

@@ -1809,6 +1809,7 @@ const CadViewer = forwardRef(function CadViewer({
   activeMeasurementId = "",
   measureState = null,
   measureModeActive = false,
+  allowMeshVertexSnap = false,
   onViewerAlertChange,
   onStepModuleTransformDetectedChange,
   urdfPosePicker = null
@@ -5440,17 +5441,38 @@ const CadViewer = forwardRef(function CadViewer({
     drawingMinStrokeLengthPx: DRAWING_MIN_STROKE_LENGTH_PX
   });
 
+  // Click is followed by OrbitControls clearing hover before React commits
+  // draft.anchor, so the locked first point lives in a ref.
+  const measureLockedAnchorRef = useRef(null);
+
   const handleMeasureHoverPoint = useCallback((pick) => {
-    measureHoverRef.current = pick || null;
+    measureHoverRef.current = pick || measureLockedAnchorRef.current || null;
     onMeasureHoverPoint?.(pick);
   }, [onMeasureHoverPoint]);
+
+  const handleMeasurePick = useCallback((pick) => {
+    if (pick && !measureLockedAnchorRef.current) {
+      measureLockedAnchorRef.current = pick;
+      measureHoverRef.current = pick;
+    } else if (pick && measureLockedAnchorRef.current) {
+      measureLockedAnchorRef.current = null;
+    }
+    onMeasurePick?.(pick);
+  }, [onMeasurePick]);
 
   // Disarming the tool has to drop the indicator; the pointer may never move again.
   useEffect(() => {
     if (!measureModeActive) {
       measureHoverRef.current = null;
+      measureLockedAnchorRef.current = null;
     }
   }, [measureModeActive]);
+
+  useEffect(() => {
+    if (!measureState?.draft?.anchor) {
+      measureLockedAnchorRef.current = null;
+    }
+  }, [measureState]);
 
   useViewerMeasureOverlay({
     measureCanvasRef,
@@ -5481,10 +5503,11 @@ const CadViewer = forwardRef(function CadViewer({
     onActivateReference,
     onDoubleActivateReference,
     onContextReference,
-    onMeasurePick,
+    onMeasurePick: handleMeasurePick,
     onMeasureHoverPoint: handleMeasureHoverPoint,
     viewerReadyTick,
-    suppressTopologyPicking: stepAnimationPlaying
+    suppressTopologyPicking: stepAnimationPlaying,
+    allowMeshVertexSnap
   });
 
   return (

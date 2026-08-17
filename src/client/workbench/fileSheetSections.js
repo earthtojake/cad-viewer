@@ -75,9 +75,9 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
         ...(showJoints ? [FILE_SHEET_SECTION_IDS.ROBOT_JOINTS] : [])
       ];
     case "mesh":
-      // A mesh (e.g. STL) has no file-specific sections; only a status tab when
-      // there's an issue. With none, the sheet is hidden entirely.
-      return [...status];
+      // Measure is the one mesh-specific control: vertex-to-vertex distance on
+      // the displayed triangles. Status still only appears when there is an issue.
+      return [...status, FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS];
     case "implicit":
       return [
         ...status,
@@ -116,7 +116,8 @@ export function defaultOpenFileSheetSectionIds(kind, options = {}) {
       ];
     case "mesh":
       return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : [])
+        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
+        FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS
       ];
     case "implicit":
       return [

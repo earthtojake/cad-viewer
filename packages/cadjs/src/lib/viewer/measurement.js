@@ -73,6 +73,48 @@ export function isFinitePoint(value) {
   );
 }
 
+/**
+ * Same rule STEP uses for corners: pick the nearest projected vertex, but only
+ * if it is within maxScreenDistancePx of the cursor.
+ */
+export function pickMeshVertexByScreenDistance(vertices, clientPoint, maxScreenDistancePx, projectToClient) {
+  const clientX = Number(clientPoint?.x);
+  const clientY = Number(clientPoint?.y);
+  const maxDistance = Number(maxScreenDistancePx);
+  if (
+    !Number.isFinite(clientX) ||
+    !Number.isFinite(clientY) ||
+    !Number.isFinite(maxDistance) ||
+    maxDistance < 0 ||
+    !Array.isArray(vertices) ||
+    typeof projectToClient !== "function"
+  ) {
+    return null;
+  }
+  let bestPoint = null;
+  let bestDistance = Infinity;
+  for (const vertex of vertices) {
+    if (!isFinitePoint(vertex)) {
+      continue;
+    }
+    const projected = projectToClient(vertex);
+    const projectedX = Number(projected?.x);
+    const projectedY = Number(projected?.y);
+    if (!Number.isFinite(projectedX) || !Number.isFinite(projectedY)) {
+      continue;
+    }
+    const distance = Math.hypot(clientX - projectedX, clientY - projectedY);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestPoint = vertex.slice(0, 3);
+    }
+  }
+  if (!bestPoint || bestDistance > maxDistance) {
+    return null;
+  }
+  return { point: bestPoint, snapKind: "vertex", screenDistance: bestDistance };
+}
+
 export function distanceBetweenPoints(a, b) {
   const vector = pointVector(a, b);
   if (!vector) {

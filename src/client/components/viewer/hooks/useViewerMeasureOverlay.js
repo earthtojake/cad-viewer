@@ -44,7 +44,7 @@ export function useViewerMeasureOverlay({
     !previewMode &&
     (measureModeActive ||
       measureState?.measurements?.length ||
-      (measureState?.draft?.anchor && measureState?.draft?.hover))
+      measureState?.draft?.anchor)
   );
 
   useEffect(() => {
@@ -71,8 +71,8 @@ export function useViewerMeasureOverlay({
       }
       const runtime = runtimeRef.current;
       const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
-      const cssWidth = mountRef.current?.clientWidth || 1;
-      const cssHeight = mountRef.current?.clientHeight || 1;
+      const cssWidth = canvas.clientWidth || mountRef.current?.clientWidth || 1;
+      const cssHeight = canvas.clientHeight || mountRef.current?.clientHeight || 1;
       const width = Math.round(cssWidth * dpr);
       const height = Math.round(cssHeight * dpr);
       if (canvas.width !== width || canvas.height !== height) {
@@ -107,6 +107,21 @@ export function useViewerMeasureOverlay({
         }
 
         const draft = state.draft;
+        const lockedAnchor = draft?.anchor;
+        if (lockedAnchor?.point) {
+          const start = projectWorldPointToClient(lockedAnchor.point, camera, localRect);
+          if (start) {
+            drawPulsingEndRing(context, start, {
+              now,
+              color: MEASURE_DIMENSION_DRAFT_COLOR,
+              baseRadius: 6
+            });
+            drawMeasureSnapMarker(context, start, {
+              snapKind: lockedAnchor.snapKind || "vertex",
+              now
+            });
+          }
+        }
         if (draft?.anchor && draft?.hover) {
           const draftMeasurement = measureRulerDraftMeasurement(state);
           const layout = screenSpaceDimensionLayout(draft.anchor, draft.hover, draftMeasurement, camera, localRect);

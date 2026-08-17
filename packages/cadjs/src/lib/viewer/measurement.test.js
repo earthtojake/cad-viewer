@@ -18,7 +18,8 @@ import {
   isPlanarFace,
   measurePointFromReference,
   measurementFromPicks,
-  normalizeVector3
+  normalizeVector3,
+  pickMeshVertexByScreenDistance
 } from "./measurement.js";
 
 
@@ -38,6 +39,20 @@ test("normalizeVector3 normalizes unit and scales and rejects unusable input", (
   assert.equal(normalizeVector3([0, 0, 0]), null);
   assert.equal(normalizeVector3([NaN, 1, 0]), null);
   assert.equal(normalizeVector3("x"), null);
+});
+
+test("pickMeshVertexByScreenDistance keeps STEP's close-range corner rule", () => {
+  const vertices = [[0, 0, 0], [10, 0, 0], [0, 10, 0]];
+  const projectToClient = (vertex) => ({ x: vertex[0] * 10, y: vertex[1] * 10 });
+  assert.deepEqual(
+    pickMeshVertexByScreenDistance(vertices, { x: 2, y: 1 }, 5, projectToClient),
+    { point: [0, 0, 0], snapKind: "vertex", screenDistance: Math.hypot(2, 1) }
+  );
+  assert.equal(
+    pickMeshVertexByScreenDistance(vertices, { x: 40, y: 40 }, 5, projectToClient),
+    null
+  );
+  assert.equal(pickMeshVertexByScreenDistance(vertices, { x: 0, y: 0 }, 5, null), null);
 });
 
 test("distanceBetweenPoints measures euclidean distance and clamps tiny values to zero", () => {

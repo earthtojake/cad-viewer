@@ -1,7 +1,7 @@
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants.js";
 
-// Callers gate on capabilities before reaching here: a format with neither parts nor
-// topology never picks, so this function no longer needs to know which format it is.
+// Callers decide whether picking is enabled (parts, topology, or Measure).
+// This helper stays format-agnostic.
 export function viewerPickModeForRenderPane({
   panToolActive = false,
   topologySelectionPending = false,

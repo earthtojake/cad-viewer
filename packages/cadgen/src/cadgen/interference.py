@@ -141,10 +141,50 @@ def occurrences_from_scene(scene: Any) -> list[Occurrence]:
     return out
 
 
-def _selected(occurrences: list[Occurrence], refs: Iterable[str] | None) -> list[Occurrence]:
+def scene_label_rows(scene: Any) -> list[dict[str, str]]:
+    """``{id, name}`` for EVERY node in the scene, groups included.
+
+    ``occurrences_from_scene`` returns only leaves, because only leaves carry a solid to test.
+    Label resolution needs more than that: a subassembly label like ``damper_body`` resolves
+    fine through the selector index (``snapshot --focus``, ``inspect refs``), so it has to
+    resolve here too or the same ref works on four CLIs and fails on two.
+    """
+    rows: list[dict[str, str]] = []
+
+    def walk(node: Any, path: tuple[int, ...]) -> None:
+        ref = "o" + ".".join(str(part) for part in path)
+        name = str(getattr(node, "name", None) or getattr(node, "source_name", None) or "")
+        if name:
+            rows.append({"id": ref, "name": name})
+        for index, child in enumerate(list(getattr(node, "children", []) or []), start=1):
+            walk(child, path + (index,))
+
+    for root_index, root in enumerate(getattr(scene, "roots", []) or [], start=1):
+        walk(root, (root_index,))
+    return rows
+
+
+def _selected(
+    occurrences: list[Occurrence],
+    refs: Iterable[str] | None,
+    *,
+    label_rows: list[dict[str, str]] | None = None,
+) -> list[Occurrence]:
     wanted = [str(ref).strip().lstrip("#") for ref in (refs or []) if str(ref).strip()]
     if not wanted:
         return occurrences
+    # `validate` and `interfere` select against the build123d scene rather than the selector
+    # index, so they need labels resolved here too. Without this a label ref matches nothing
+    # and both report a clean run over zero occurrences -- a silent no-op, which is worse than
+    # an error. An unknown or ambiguous label raises, and the CLIs turn that into ok:false.
+    from cadgen.label_refs import build_label_aliases, resolve_label_selectors
+
+    alias_map = build_label_aliases(
+        label_rows
+        if label_rows is not None
+        else [{"id": occurrence.ref, "name": occurrence.name} for occurrence in occurrences]
+    )
+    wanted = [str(resolved).lstrip("#") for resolved in resolve_label_selectors(wanted, alias_map)]
     keep: list[Occurrence] = []
     for occurrence in occurrences:
         for ref in wanted:
@@ -234,7 +274,7 @@ def inspect_interference(
         logger=logger,
     )
 
-    occurrences = _selected(occurrences_from_scene(scene), refs)
+    occurrences = _selected(occurrences_from_scene(scene), refs, label_rows=scene_label_rows(scene))
     clashes, stats = find_clashes(occurrences, tolerance=tolerance, max_pairs=max_pairs)
     return {
         "ok": not clashes,

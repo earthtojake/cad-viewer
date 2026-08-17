@@ -545,17 +545,7 @@ def merge_assembly_occurrences(
     )
 
 
-def index_with_assembly_occurrences(index: SelectorIndex, artifact: object) -> SelectorIndex:
-    """The whole instance tree -- occurrences AND their entities -- keyed off a
-    ``StepTopologyArtifact``.
-
-    Lives here rather than at either call site because there are TWO of them and they had already
-    drifted: ``snapshot_cli.artifact_selector_index`` serves ``--focus``/``--hide``, while
-    ``inspect refs`` builds its own index from the same bundle. Fixing one would have left the
-    other reporting the bug, which is how 0b presented as three separate tool failures.
-
-    Anything that is not an assembly package returns untouched, so part entries are unaffected.
-    """
+def _index_with_assembly_occurrences(index: SelectorIndex, artifact: object) -> SelectorIndex:
     if index is None or artifact is None:
         return index
     if str(getattr(artifact, "kind", "")) != "assembly":
@@ -572,3 +562,25 @@ def index_with_assembly_occurrences(index: SelectorIndex, artifact: object) -> S
         return index
     merged = merge_assembly_occurrences(index, descriptor, package_dir)
     return merge_assembly_entities(merged, descriptor, package_dir)
+
+
+def index_with_assembly_occurrences(index: SelectorIndex, artifact: object) -> SelectorIndex:
+    """The whole instance tree -- occurrences AND their entities -- keyed off a
+    ``StepTopologyArtifact``, plus the label aliases for whatever rows survive.
+
+    Lives here rather than at either call site because there are TWO of them and they had already
+    drifted: ``snapshot_cli.artifact_selector_index`` serves ``--focus``/``--hide``, while
+    ``inspect refs`` builds its own index from the same bundle. Fixing one would have left the
+    other reporting the bug, which is how 0b presented as three separate tool failures.
+
+    Label aliases are attached on EVERY return path, including the early ones for part entries,
+    for the same reason: this is the one function both call sites already funnel through, so
+    attaching here is what keeps them from drifting again. Aliases must be computed after the
+    assembly merge, because the merge is what decides the final row set.
+
+    Anything that is not an assembly package keeps its own occurrence rows, so part entries are
+    unaffected other than gaining aliases.
+    """
+    from cadgen.label_refs import attach_label_aliases
+
+    return attach_label_aliases(_index_with_assembly_occurrences(index, artifact))

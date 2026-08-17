@@ -20,6 +20,7 @@ src/cadgen/implicit_artifact.py
 src/cadgen/implicit_export.py
 src/cadgen/instances.py
 src/cadgen/interference.py
+src/cadgen/label_refs.py
 src/cadgen/lookup.py
 src/cadgen/metadata.py
 src/cadgen/progress.py

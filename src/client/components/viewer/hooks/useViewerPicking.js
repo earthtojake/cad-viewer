@@ -1,6 +1,11 @@
 import { useEffect, useRef } from "react";
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants.js";
-import { classifyMeasurePick, edgeGeometryFromSegments, isFinitePoint } from "cadjs/lib/viewer/measurement.js";
+import {
+  classifyMeasurePick,
+  edgeGeometryFromSegments,
+  isFinitePoint,
+  pickMeshVertexByScreenDistance
+} from "cadjs/lib/viewer/measurement.js";
 import { buildEdgeLinePositionsFromProxy } from "cadjs/lib/viewer/referenceGeometry.js";
 import { pointVisibleByClipPlane } from "cadjs/lib/viewer/clipPlane.js";
 import { screenLimitedPickThreshold } from "cadjs/lib/viewer/pickingThresholds.js";
@@ -20,12 +25,65 @@ const EDGE_PICK_PRIORITY_WITH_FACE_PX = EDGE_PICK_MAX_SCREEN_DISTANCE_WITH_FACE_
 const EDGE_HOVER_PRIORITY_WITH_FACE_PX = EDGE_HOVER_MAX_SCREEN_DISTANCE_WITH_FACE_PX;
 const CORNER_PICK_MAX_SCREEN_DISTANCE_PX = 5;
 const CORNER_HOVER_MAX_SCREEN_DISTANCE_PX = 4;
+// Mesh Measure has no face/edge fallback, so the corner window is wider
+// than STEP's 4/5 px. Still a screen-space cap, not "nearest of the triangle".
+const MESH_VERTEX_HOVER_MAX_SCREEN_DISTANCE_PX = 14;
+const MESH_VERTEX_PICK_MAX_SCREEN_DISTANCE_PX = 16;
 const CORNER_PICK_PRIORITY_WITH_OTHER_PX = 4;
 const CORNER_HOVER_PRIORITY_WITH_OTHER_PX = 3;
 const HOVER_PICK_MIN_MOVE_PX = 2;
 const FINE_POINTER_TAP_SLOP_PX = 4;
 const COARSE_POINTER_TAP_SLOP_PX = 12;
 export const VIEWER_DOUBLE_CLICK_ACTIVATION_DELAY_MS = 220;
+
+function applyColumnMajorMatrix4(point, elements) {
+  if (!isFinitePoint(point) || !elements || elements.length < 16) {
+    return null;
+  }
+  const x = point[0];
+  const y = point[1];
+  const z = point[2];
+  const w = (elements[3] * x) + (elements[7] * y) + (elements[11] * z) + elements[15];
+  if (!Number.isFinite(w) || Math.abs(w) < 1e-12) {
+    return null;
+  }
+  return [
+    ((elements[0] * x) + (elements[4] * y) + (elements[8] * z) + elements[12]) / w,
+    ((elements[1] * x) + (elements[5] * y) + (elements[9] * z) + elements[13]) / w,
+    ((elements[2] * x) + (elements[6] * y) + (elements[10] * z) + elements[14]) / w
+  ];
+}
+
+/**
+ * World-space corners of the triangle a mesh ray hit. Used to snap Measure
+ * picks to a vertex without walking the rest of the mesh.
+ */
+export function worldTriangleVerticesFromMeshIntersection(intersection) {
+  const face = intersection?.face;
+  const position = intersection?.object?.geometry?.attributes?.position;
+  const matrix = intersection?.object?.matrixWorld?.elements;
+  if (!face || !position || typeof position.getX !== "function" || !matrix) {
+    return null;
+  }
+  const vertices = [];
+  for (const index of [face.a, face.b, face.c]) {
+    if (!Number.isInteger(index) || index < 0 || index >= position.count) {
+      return null;
+    }
+    const local = [Number(position.getX(index)), Number(position.getY(index)), Number(position.getZ(index))];
+    const world = applyColumnMajorMatrix4(local, matrix);
+    if (!world) {
+      return null;
+    }
+    vertices.push(world);
+  }
+  return vertices;
+}
+
+const MESH_VERTEX_MEASURE_REFERENCE = Object.freeze({
+  selectorType: "vertex",
+  pickData: Object.freeze({ selectorType: "vertex" })
+});
 
 export function measureHitPointFromWorldIntersection(intersection) {
   if (!intersection?.point) {
@@ -197,7 +255,8 @@ export function useViewerPicking({
   viewerReadyTick,
   // While a STEP animation is playing, reference hover/selection is suspended
   // so playback frames skip raycasts and pick-state rebuilds entirely.
-  suppressTopologyPicking = false
+  suppressTopologyPicking = false,
+  allowMeshVertexSnap = false
 }) {
   // Keep pointer listeners stable across parent rerenders; hover itself updates parent state.
   const pickModeRef = useRef(pickMode);
@@ -213,6 +272,7 @@ export function useViewerPicking({
   const onContextReferenceRef = useRef(onContextReference);
   const onMeasurePickRef = useRef(onMeasurePick);
   const onMeasureHoverPointRef = useRef(onMeasureHoverPoint);
+  const allowMeshVertexSnapRef = useRef(allowMeshVertexSnap);
   const allowedFaceReferenceIdsRef = useRef(new Set());
   const allowedEdgeReferenceIdsRef = useRef(new Set());
   const allowedVertexReferenceIdsRef = useRef(new Set());
@@ -230,6 +290,7 @@ export function useViewerPicking({
   onContextReferenceRef.current = onContextReference;
   onMeasurePickRef.current = onMeasurePick;
   onMeasureHoverPointRef.current = onMeasureHoverPoint;
+  allowMeshVertexSnapRef.current = allowMeshVertexSnap === true;
   allowedFaceReferenceIdsRef.current = new Set(
     (Array.isArray(pickableFaces) ? pickableFaces : [])
       .map((reference) => String(reference?.id || "").trim())
@@ -769,12 +830,45 @@ export function useViewerPicking({
       };
     }
 
+    function projectWorldArrayToClient(point) {
+      if (!isFinitePoint(point) || !runtime?.THREE?.Vector3) {
+        return null;
+      }
+      return projectPointToClient(new runtime.THREE.Vector3(point[0], point[1], point[2]));
+    }
+
     function measureReferenceFromPosition(clientX, clientY, { hover = false, bypassTopology = false } = {}) {
       setPointerFromPosition(clientX, clientY);
       const modelIntersections = intersectVisibleModelMeshes();
-      const worldHitPoint = frontMostModelIntersections(modelIntersections)
-        .map((intersection) => measureHitPointFromWorldIntersection(intersection))
-        .find(Boolean) || null;
+      const hitIntersection = frontMostModelIntersections(modelIntersections)
+        .find((intersection) => measureHitPointFromWorldIntersection(intersection)) || null;
+      const worldHitPoint = measureHitPointFromWorldIntersection(hitIntersection);
+      const modelOffset = measureModelOffsetFromRuntime(runtimeRef.current);
+      if (allowMeshVertexSnapRef.current && !bypassTopology) {
+        const triangleWorld = worldTriangleVerticesFromMeshIntersection(hitIntersection);
+        const maxScreenDistancePx = hover
+          ? MESH_VERTEX_HOVER_MAX_SCREEN_DISTANCE_PX
+          : MESH_VERTEX_PICK_MAX_SCREEN_DISTANCE_PX;
+        const meshSnap = pickMeshVertexByScreenDistance(
+          triangleWorld,
+          { x: clientX, y: clientY },
+          maxScreenDistancePx,
+          projectWorldArrayToClient
+        );
+        if (!meshSnap) {
+          return { pick: null, referenceId: "" };
+        }
+        return {
+          pick: measurePickForPosition({
+            reference: MESH_VERTEX_MEASURE_REFERENCE,
+            worldHitPoint,
+            referenceId: "",
+            vertexPoint: measureWorldPointToModel(meshSnap.point, modelOffset),
+            modelOffset
+          }),
+          referenceId: ""
+        };
+      }
       const referenceId = bypassTopology ? "" : (pickTopologyReference(modelIntersections, clientX, clientY, { hover }) || "");
       const reference = referenceId ? measureReferenceById(referenceId) : null;
       const { edgeSegments, edgeGeometry, vertexPoint } = bypassTopology
@@ -789,7 +883,7 @@ export function useViewerPicking({
           edgeSegments,
           edgeGeometry,
           vertexPoint,
-          modelOffset: measureModelOffsetFromRuntime(runtimeRef.current)
+          modelOffset
         }),
         referenceId
       };

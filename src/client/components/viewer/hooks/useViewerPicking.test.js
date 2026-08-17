@@ -15,7 +15,8 @@ import {
   measureModelOffsetFromRuntime,
   measureModelPointToWorld,
   measurePickForPosition,
-  measureWorldPointToModel
+  measureWorldPointToModel,
+  worldTriangleVerticesFromMeshIntersection
 } from "./useViewerPicking.js";
 import { partIdFromIntersection, shouldRaycastRecordForPick } from "./partPicking.js";
 
@@ -157,6 +158,44 @@ test("measure vertex picks are lifted out of the model frame too", () => {
   });
   assert.equal(pick.snapKind, "vertex");
   assert.deepEqual(pick.point, [50, 30, 10]);
+});
+
+test("worldTriangleVerticesFromMeshIntersection reads the hit face in world space", () => {
+  const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+  const translated = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 10, 0, 0, 1];
+  const positions = {
+    count: 3,
+    getX(index) {
+      return [0, 2, 0][index];
+    },
+    getY(index) {
+      return [0, 0, 2][index];
+    },
+    getZ() {
+      return 0;
+    }
+  };
+  const intersection = {
+    face: { a: 0, b: 1, c: 2 },
+    object: {
+      geometry: { attributes: { position: positions } },
+      matrixWorld: { elements: translated }
+    }
+  };
+  assert.deepEqual(worldTriangleVerticesFromMeshIntersection(intersection), [
+    [10, 0, 0],
+    [12, 0, 0],
+    [10, 2, 0]
+  ]);
+  assert.deepEqual(
+    worldTriangleVerticesFromMeshIntersection({
+      ...intersection,
+      object: { ...intersection.object, matrixWorld: { elements: identity } }
+    }),
+    [[0, 0, 0], [2, 0, 0], [0, 2, 0]]
+  );
+  assert.equal(worldTriangleVerticesFromMeshIntersection(null), null);
+  assert.equal(worldTriangleVerticesFromMeshIntersection({ face: { a: 0, b: 1, c: 9 }, object: intersection.object }), null);
 });
 
 test("measureModelOffsetFromRuntime reads the offset applied to the pick groups", () => {

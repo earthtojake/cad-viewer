@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   buildAssemblyPartCopyText,
   buildAssemblyMateCopyText,
+  buildEntryLabelAliasMap,
   buildNormalizedReferenceState,
   buildReferenceCacheKey,
   buildSelectionCopyButtonLabel,
@@ -16,6 +17,7 @@ import {
   orderedStringListEqual,
   parseAssemblyPartReferenceSelectionId,
   resolveTopologyRelativeFile,
+  resolveViewerSelector,
   selectRequestedAssemblyComponents,
   uniqueStringList
 } from "./referenceSelection.js";
@@ -233,4 +235,45 @@ test("selectRequestedAssemblyComponents loads only the expanded occurrences' com
   const part = selectRequestedAssemblyComponents(descriptor, [], { singleComponentPart: true });
   assert.deepEqual(part.neededCids, ["cidA", "cidB"]);
   assert.equal(part.loadedTopologyKey, "*");
+});
+
+test("the viewer resolves a pasted label ref against the parts it already holds", () => {
+  const aliasMap = buildEntryLabelAliasMap([
+    { occurrenceId: "o1.1.2", name: "eye_shank" },
+    { occurrenceId: "o1.3", name: "pressure_tube" }
+  ]);
+
+  assert.equal(resolveViewerSelector("#eye_shank", aliasMap), "o1.1.2");
+  assert.equal(resolveViewerSelector("eye_shank.f45", aliasMap), "o1.1.2.f45");
+  assert.equal(resolveViewerSelector("#pressure_tube", aliasMap), "o1.3");
+});
+
+test("a pasted numeric ref is returned untouched, with or without an alias map", () => {
+  // Backwards compatibility: every ref that worked before labels existed still works, and a
+  // model with no labels at all behaves exactly as it did.
+  const aliasMap = buildEntryLabelAliasMap([{ occurrenceId: "o1.1", name: "eye_shank" }]);
+  for (const selector of ["o1.2", "o12.f19", "f45", "m1"]) {
+    assert.equal(resolveViewerSelector(selector, aliasMap), selector, selector);
+    assert.equal(resolveViewerSelector(selector, null), selector, `${selector} without aliases`);
+  }
+  assert.equal(resolveViewerSelector("#o1.12.f19", null), "o1.12.f19");
+});
+
+test("an unknown or duplicated label is rejected rather than guessed at", () => {
+  const aliasMap = buildEntryLabelAliasMap([
+    { occurrenceId: "o1.3", name: "cast_rim" },
+    { occurrenceId: "o1.7", name: "cast_rim" }
+  ]);
+
+  // Both wheels honestly carry the same label, so the bare name must not pick one.
+  assert.equal(resolveViewerSelector("#cast_rim", aliasMap), "");
+  assert.equal(resolveViewerSelector("#cast_rim_1", aliasMap), "o1.3");
+  assert.equal(resolveViewerSelector("#cast_rim_2", aliasMap), "o1.7");
+  assert.equal(resolveViewerSelector("#no_such_part", aliasMap), "");
+  assert.equal(resolveViewerSelector("#eye_shank", null), "", "no alias map means no label refs");
+});
+
+test("an entry whose parts carry no usable labels has no alias map at all", () => {
+  assert.equal(buildEntryLabelAliasMap([]), null);
+  assert.equal(buildEntryLabelAliasMap([{ occurrenceId: "o1.1", name: "" }]), null);
 });

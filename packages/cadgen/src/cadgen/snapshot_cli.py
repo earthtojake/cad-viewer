@@ -830,6 +830,19 @@ def normalize_selection_selector(
     parsed = cad_ref_syntax.parse_selector(text)
     if parsed is None:
         return []
+    if parsed.label:
+        # Labels become numeric here, before any validation or job building, so everything
+        # downstream -- including the JS render runtime -- only ever sees occurrence ids.
+        from cadgen.label_refs import LabelResolutionError, resolve_label_selectors
+
+        alias_map = getattr(selector_index, "label_aliases", None) if selector_index else None
+        try:
+            resolved = resolve_label_selectors([text], alias_map)
+        except LabelResolutionError as error:
+            raise SnapshotError(f"{source_label} {error}") from error
+        parsed = cad_ref_syntax.parse_selector(resolved[0]) if resolved else None
+        if parsed is None:
+            return []
     if parsed.selector_type == "opaque":
         return [parsed.canonical]
     if parsed.selector_type != "occurrence":

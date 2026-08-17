@@ -1,4 +1,11 @@
-import { buildCadRefToken, parseCadRefToken, sortCadRefSelectors } from "cadjs/lib/cadRefs.js";
+import {
+  buildCadRefToken,
+  buildLabelAliasMap,
+  isNativeCadSelector,
+  parseCadRefToken,
+  resolveLabelSelector,
+  sortCadRefSelectors
+} from "cadjs/lib/cadRefs.js";
 import { entryReferenceAssetSignature } from "cadjs/lib/entryAssets.js";
 import { buildSelectorRuntime } from "cadjs/lib/selectors/runtime.js";
 import { cadPathForEntry, fileKey } from "./sidebar.js";
@@ -200,6 +207,42 @@ function appendCadRefText(groups, plainLines, outputOrder, text, key = "") {
   return addedCount;
 }
 
+/**
+ * The alias map for an entry's parts, or null when the entry has none.
+ *
+ * The viewer already holds every part with its name, so labels resolve client-side with no
+ * extra request. Built per call site rather than cached because the parts list is small and
+ * already in memory; if that stops being true this is the one place to memoize.
+ */
+export function buildEntryLabelAliasMap(parts) {
+  const rows = (Array.isArray(parts) ? parts : [])
+    .map((part) => ({
+      id: String(part?.occurrenceId || part?.id || "").trim(),
+      name: String(part?.name || part?.label || "").trim()
+    }))
+    .filter((row) => row.id && row.name);
+  return rows.length ? buildLabelAliasMap(rows) : null;
+}
+
+/**
+ * Turn a selector a user pasted into one the viewer can act on.
+ *
+ * Numeric selectors are returned untouched -- a ref that worked before labels existed keeps
+ * working and keeps meaning the same thing. A label resolves through the alias map; an unknown
+ * or ambiguous label returns "" so the caller rejects it exactly as it rejects any other
+ * selector it cannot use.
+ */
+export function resolveViewerSelector(selector, aliasMap = null) {
+  const text = String(selector || "").trim().replace(/^#/, "");
+  if (!text) {
+    return "";
+  }
+  if (isNativeCadSelector(text)) {
+    return text;
+  }
+  return aliasMap ? resolveLabelSelector(text, aliasMap) : "";
+}
+
 export function canonicalCadRefCopyText(text, { allowPlain = false } = {}) {
   const normalizedText = String(text || "").trim();
   if (!normalizedText) {
@@ -260,9 +303,7 @@ export function buildAssemblyPartCopyText(part, entry) {
     part?.id
   ].map((value) => {
     const candidate = String(value || "").trim();
-    return /^(?:o\d+(?:\.\d+)*(?:\.[sfev]\d+)?|[sfev]\d+|m\d+)$/i.test(candidate)
-      ? candidate
-      : "";
+    return isNativeCadSelector(candidate) ? candidate : "";
   }).find(Boolean) || "";
   if (!selector) {
     return "";
