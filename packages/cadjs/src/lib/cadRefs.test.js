@@ -4,11 +4,13 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
+  buildCadRefToken,
   buildLabelAliasMap,
   isNativeCadSelector,
   labelRefForOccurrence,
   normalizeCadRefSelectors,
   parseCadRefSelector,
+  parseCadRefToken,
   resolveLabelSelector
 } from "./cadRefs.js";
 
@@ -123,4 +125,36 @@ test("labelRefForOccurrence reports the paste spelling", () => {
   ]);
   assert.equal(labelRefForOccurrence(aliasMap, "o1.1"), "#eye_shank");
   assert.equal(labelRefForOccurrence(aliasMap, "o9.9"), "");
+});
+
+test("every token case parses as the shared fixture says", () => {
+  for (const testCase of FIXTURE.tokenCases) {
+    const parsed = parseCadRefToken(testCase.text);
+    if (testCase.selectors === null) {
+      assert.equal(parsed, null, `${testCase.text} should not be a token`);
+      continue;
+    }
+    assert.ok(parsed, `${testCase.text} should parse`);
+    assert.equal(parsed.cadPath, testCase.cadPath, testCase.text);
+    assert.deepEqual(parsed.selectors, testCase.selectors, testCase.text);
+  }
+});
+
+test("a token round-trips through buildCadRefToken", () => {
+  // buildCadRefToken took a cadPath and discarded it (`void cadPath`). It no longer does, so
+  // what the viewer copies is what the grammar parses back.
+  assert.equal(buildCadRefToken({ cadPath: "plate.stl", selector: "o1.2" }), "plate.stl#o1.2");
+  assert.equal(buildCadRefToken({ selector: "o1.2" }), "#o1.2");
+  assert.equal(buildCadRefToken({ cadPath: "plate.stl" }), "plate.stl#");
+  assert.equal(buildCadRefToken({}), "#");
+  assert.equal(
+    parseCadRefToken(buildCadRefToken({ cadPath: "a/b.step.py", selectors: ["o1.2", "f3"] })).cadPath,
+    "a/b.step.py"
+  );
+});
+
+test("bare tokens carry no file prefix", () => {
+  for (const text of ["#o1", "#o1.2.f3", "#f45", "#m1", "#", "#o1.2,f3"]) {
+    assert.equal(parseCadRefToken(text).cadPath, "", `${text} must carry no prefix`);
+  }
 });

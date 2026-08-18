@@ -164,13 +164,38 @@ def scene_label_rows(scene: Any) -> list[dict[str, str]]:
     return rows
 
 
+def _strip_ref_file_prefix(ref: str, entry_target: str) -> str:
+    """Drop a `<file>#` prefix that names this entry; raise when it names another.
+
+    `validate --refs` and `interfere --refs` take refs a user may have copied from the viewer,
+    which now carry a file prefix. Ignoring a foreign prefix would select nothing and report a
+    clean run over zero occurrences -- the silent no-op this module's callers were already
+    burned by once.
+    """
+    from cadgen.cad_ref_syntax import ensure_ref_file_matches
+
+    text = str(ref).strip()
+    if "#" not in text:
+        return text.lstrip("#")
+    prefix, _, remainder = text.partition("#")
+    ensure_ref_file_matches(prefix, entry_target, source_label=f"ref {text!r}")
+    return remainder.strip()
+
+
 def _selected(
     occurrences: list[Occurrence],
     refs: Iterable[str] | None,
     *,
     label_rows: list[dict[str, str]] | None = None,
+    entry_target: str = "",
 ) -> list[Occurrence]:
-    wanted = [str(ref).strip().lstrip("#") for ref in (refs or []) if str(ref).strip()]
+    wanted = [
+        stripped
+        for stripped in (
+            _strip_ref_file_prefix(ref, entry_target) for ref in (refs or []) if str(ref).strip()
+        )
+        if stripped
+    ]
     if not wanted:
         return occurrences
     # `validate` and `interfere` select against the build123d scene rather than the selector
@@ -274,7 +299,9 @@ def inspect_interference(
         logger=logger,
     )
 
-    occurrences = _selected(occurrences_from_scene(scene), refs, label_rows=scene_label_rows(scene))
+    occurrences = _selected(
+        occurrences_from_scene(scene), refs, label_rows=scene_label_rows(scene), entry_target=str(entry)
+    )
     clashes, stats = find_clashes(occurrences, tolerance=tolerance, max_pairs=max_pairs)
     return {
         "ok": not clashes,

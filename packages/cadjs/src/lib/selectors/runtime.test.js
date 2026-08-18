@@ -113,7 +113,10 @@ test("buildSelectorRuntime remaps source part rows onto an assembly occurrence",
   const faces = runtime.references.filter((reference) => reference.selectorType === "face");
 
   assert.deepEqual(faces.map((reference) => reference.displaySelector), ["o1.5.f1", "o1.5.f2"]);
-  assert.equal(faces[1].copyText, "#o1.5.f2");
+  // copyCadPath now reaches the copy text. It was always passed in here and always discarded
+  // by buildCadRefToken; the token layer honours it so a copied ref says which file it came
+  // from. The viewer supplies the shortest unique path suffix rather than a full path.
+  assert.equal(faces[1].copyText, "parts/root#o1.5.f2");
   assert.equal(faces[1].pickData.surfaceType, "plane");
 });
 
@@ -188,7 +191,7 @@ test("buildSelectorRuntime uses STEP topology shape names in shape references", 
   const shape = runtime.references.find((reference) => reference.selectorType === "shape");
 
   assert.equal(shape.summary, "base:front_left solid volume=12");
-  assert.equal(shape.copyText, "#s1");
+  assert.equal(shape.copyText, "parts/labeled#s1");
   assert.equal(shape.pickData.name, "base:front_left");
   assert.equal(shape.pickData.sourceName, "base");
 });

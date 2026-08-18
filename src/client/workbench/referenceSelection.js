@@ -1,9 +1,7 @@
 import {
   buildCadRefToken,
-  buildLabelAliasMap,
   isNativeCadSelector,
   parseCadRefToken,
-  resolveLabelSelector,
   sortCadRefSelectors
 } from "cadjs/lib/cadRefs.js";
 import { entryReferenceAssetSignature } from "cadjs/lib/entryAssets.js";
@@ -50,7 +48,11 @@ export function buildNormalizedReferenceState(entry, referencePayload = null, {
   // A component-GLB package has no whole-assembly selector bundle; the caller composes the
   // per-component runtimes and passes the result here instead of a single bundle to parse.
   const selectorRuntime = prebuiltSelectorRuntime || buildSelectorRuntime(referencePayload, {
-    copyCadPath: copyCadPath || cadPathForEntry(entry),
+    // fileRefPrefix is the shortest path suffix that names this entry uniquely, extension
+    // included -- the extension is what separates format siblings (plate.stl vs plate.3mf),
+    // which is why cadPathForEntry (which strips it) is NOT used here. An entry without the
+    // field emits bare "#..." exactly as before, so the prefix is opt-in per call site.
+    copyCadPath: copyCadPath || fileRefPrefixForEntry(entry),
     partId,
     transform,
     remapOccurrenceId,
@@ -207,48 +209,14 @@ function appendCadRefText(groups, plainLines, outputOrder, text, key = "") {
   return addedCount;
 }
 
-/**
- * The alias map for an entry's parts, or null when the entry has none.
- *
- * The viewer already holds every part with its name, so labels resolve client-side with no
- * extra request. Built per call site rather than cached because the parts list is small and
- * already in memory; if that stops being true this is the one place to memoize.
- */
-export function buildEntryLabelAliasMap(parts) {
-  const rows = (Array.isArray(parts) ? parts : [])
-    .map((part) => ({
-      id: String(part?.occurrenceId || part?.id || "").trim(),
-      name: String(part?.name || part?.label || "").trim()
-    }))
-    .filter((row) => row.id && row.name);
-  return rows.length ? buildLabelAliasMap(rows) : null;
-}
-
-/**
- * Turn a selector a user pasted into one the viewer can act on.
- *
- * Numeric selectors are returned untouched -- a ref that worked before labels existed keeps
- * working and keeps meaning the same thing. A label resolves through the alias map; an unknown
- * or ambiguous label returns "" so the caller rejects it exactly as it rejects any other
- * selector it cannot use.
- */
-export function resolveViewerSelector(selector, aliasMap = null) {
-  const text = String(selector || "").trim().replace(/^#/, "");
-  if (!text) {
-    return "";
-  }
-  if (isNativeCadSelector(text)) {
-    return text;
-  }
-  return aliasMap ? resolveLabelSelector(text, aliasMap) : "";
-}
-
 export function canonicalCadRefCopyText(text, { allowPlain = false } = {}) {
   const normalizedText = String(text || "").trim();
   if (!normalizedText) {
     return "";
   }
-  if (!normalizedText.startsWith("#")) {
+  // Copy text now may be `<file>#<refs>`, so a bare startsWith("#") test would reject exactly
+  // what the copy buttons produce.
+  if (!normalizedText.includes("#")) {
     return allowPlain ? normalizedText : "";
   }
   const token = normalizedText.split(/\s+/)[0];
@@ -292,9 +260,27 @@ export function copySelectedReferenceText(references) {
   };
 }
 
-export function buildAssemblyPartCopyText(part, entry) {
-  void entry;
+/**
+ * Put `prefix` in front of a copy line that has none, leaving one that already has a prefix
+ * alone. Idempotent on purpose: copy text reaches the clipboard through several builders, and
+ * applying this at the one funnel they all pass through is what keeps them consistent without
+ * threading an entry through every one of them.
+ */
+export function withFileRefPrefix(line, prefix) {
+  const text = String(line || "").trim();
+  const filePrefix = String(prefix || "").trim();
+  if (!text || !filePrefix || !text.includes("#")) {
+    return text;
+  }
+  return text.startsWith("#") ? `${filePrefix}${text}` : text;
+}
 
+/** The file prefix a copied ref should carry, or "" when the entry has none. */
+export function fileRefPrefixForEntry(entry) {
+  return String(entry?.fileRefPrefix || "").trim();
+}
+
+export function buildAssemblyPartCopyText(part, entry) {
   const selector = [
     part?.displaySelector,
     part?.occurrenceId,
@@ -308,9 +294,7 @@ export function buildAssemblyPartCopyText(part, entry) {
   if (!selector) {
     return "";
   }
-  return buildCadRefToken({
-    selector
-  });
+  return buildCadRefToken({ cadPath: fileRefPrefixForEntry(entry), selector });
 }
 
 export function buildWholeStepEntryCopyReference(entry) {
@@ -319,7 +303,8 @@ export function buildWholeStepEntryCopyReference(entry) {
   }
   return {
     id: "step-entry:whole",
-    copyText: buildCadRefToken()
+    // `<prefix>#` names the whole file; with no prefix this stays the bare "#" it always was.
+    copyText: buildCadRefToken({ cadPath: fileRefPrefixForEntry(entry) })
   };
 }
 
@@ -328,12 +313,11 @@ export function buildAssemblyMateSelector(mate) {
 }
 
 export function buildAssemblyMateCopyText(mate, entry) {
-  void entry;
   const selector = buildAssemblyMateSelector(mate);
   if (!selector) {
     return "";
   }
-  return buildCadRefToken({ selector });
+  return buildCadRefToken({ cadPath: fileRefPrefixForEntry(entry), selector });
 }
 
 export function buildSelectionCopyPayload({ references = [], parts = [], mates = [], entry = null } = {}) {
@@ -390,6 +374,21 @@ export function buildSelectionCopyButtonLabel(lines, { limit = 1 } = {}) {
 
   const visibleTokens = tokens.slice(0, normalizedLimit);
   return `Copy ${visibleTokens.join(", ")}`;
+}
+
+/**
+ * The label to fall back to when the ref itself will not fit: "Copy 3 refs".
+ *
+ * A ref cut off mid-token ("Copy motorcycle_shock_absor…") tells the user less than a count
+ * does — it looks like the ref is wrong rather than merely long. The clipboard carries the
+ * whole thing either way.
+ */
+export function buildSelectionCopyCountLabel(count) {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if (!n) {
+    return "Copy refs";
+  }
+  return `Copy ${n} ref${n === 1 ? "" : "s"}`;
 }
 
 export function orderedStringListEqual(a, b) {

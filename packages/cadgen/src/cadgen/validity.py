@@ -193,7 +193,9 @@ def inspect_validity(
         logger=logger,
     )
 
-    occurrences = _selected(occurrences_from_scene(scene), refs, label_rows=scene_label_rows(scene))
+    occurrences = _selected(
+        occurrences_from_scene(scene), refs, label_rows=scene_label_rows(scene), entry_target=str(entry)
+    )
 
     parts: list[dict[str, object]] = []
     failures = 0

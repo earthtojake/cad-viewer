@@ -180,11 +180,13 @@ import {
   getActiveViewPlaneFaceId,
   getKeyboardOrbitAxes,
   getKeyboardOrbitCommand,
+  isPinchWheelEvent,
   isTrackpadLikeWheelEvent,
   KEYBOARD_ORBIT_NUDGE_RAD,
   normalizeViewportFrameInsets,
   readViewPlaneOrientation,
   stepKeyboardOrbit,
+  WHEEL_PINCH_DELTA_BOOST,
   VIEW_PLANE_DEFAULT_PRESET,
   VIEW_PLANE_FACE_BY_ID,
   VIEW_PLANE_FACES,
@@ -225,11 +227,17 @@ const IDLE_PIXEL_RATIO_CAP = 2;
 const INTERACTION_PIXEL_RATIO_CAP = 1.25;
 const INTERACTION_IDLE_DELAY_MS = 140;
 const DEFAULT_DAMPING_FACTOR = 0.14;
+// Wheel zoom speeds are exponents, not multipliers: OrbitControls r161+ scales the camera
+// distance by 0.95 ^ (zoomSpeed * |deltaY| / 100), with deltaY already normalized for
+// deltaMode. A standard mouse notch is |deltaY| = 100, so a speed of N means one notch moves
+// the camera by 0.95^N -- 2.5 is about -12%. Before r161 the same expression also divided by
+// floor(devicePixelRatio), which made every one of these numbers mean something different on
+// a 1x display than on a Retina one; that division is gone, so they are display-independent.
 const DEFAULT_ZOOM_SPEED = 4.5;
 const COARSE_POINTER_ZOOM_SPEED = 1.6;
 const EXPLODED_VIEW_ANIMATION_DURATION_MS = 1000;
-const ACCELERATED_WHEEL_ZOOM_SPEED = 10;
-const TRACKPAD_PINCH_ZOOM_SPEED = 14;
+const ACCELERATED_WHEEL_ZOOM_SPEED = 2.5;
+const TRACKPAD_PINCH_ZOOM_SPEED = 7;
 const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
 const CAMERA_TRANSITION_EASING = Object.freeze({
   EASE_IN_OUT_CUBIC: "ease-in-out-cubic",
@@ -3710,6 +3718,8 @@ const CadViewer = forwardRef(function CadViewer({
     cancelCameraTransition,
     clearKeyboardOrbitState,
     isTrackpadLikeWheelEvent,
+    isPinchWheelEvent,
+    WHEEL_PINCH_DELTA_BOOST,
     getKeyboardOrbitCommand,
     getKeyboardOrbitAxes,
     applyOrbitDelta,

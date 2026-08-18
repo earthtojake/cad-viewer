@@ -823,10 +823,26 @@ def normalize_selection_selector(
     *,
     selector_index: lookup.SelectorIndex | None,
     source_label: str,
+    expected_cad_path: str = "",
 ) -> list[str]:
     text = str(raw_value or "").strip()
     if not text:
         return []
+    # A copied ref may carry a file prefix (`plate.step.py#o1.2`). Accept it when it names the
+    # model being rendered, refuse it when it names another -- rendering a different file's ref
+    # against this model would focus the wrong geometry and look like it worked.
+    if "#" in text:
+        prefix, _, remainder = text.partition("#")
+        if prefix.strip():
+            try:
+                cad_ref_syntax.ensure_ref_file_matches(
+                    prefix, expected_cad_path, source_label=f"{source_label} ref {text!r}"
+                )
+            except ValueError as error:
+                raise SnapshotError(str(error)) from error
+        text = remainder.strip()
+        if not text:
+            return []
     parsed = cad_ref_syntax.parse_selector(text)
     if parsed is None:
         return []
@@ -861,11 +877,15 @@ def normalize_selection_filter_values(
     selector_index: lookup.SelectorIndex | None,
     source_label: str,
 ) -> list[str]:
-    _ = expected_cad_path
     selectors: list[str] = []
     for raw_value in selection_value_list(value):
         selectors.extend(
-            normalize_selection_selector(raw_value, selector_index=selector_index, source_label=source_label)
+            normalize_selection_selector(
+                raw_value,
+                selector_index=selector_index,
+                source_label=source_label,
+                expected_cad_path=expected_cad_path,
+            )
         )
     return selectors
 

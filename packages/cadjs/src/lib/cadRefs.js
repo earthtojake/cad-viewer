@@ -1,4 +1,7 @@
-const CAD_TOKEN_RE = /^\s*#([^\s]*)/;
+// `<file>#<selectors>`, file half optional. Mirrors CAD_TOKEN_RE in cadgen/cad_ref_syntax.py;
+// the tokenCases in cadRefs.parity.json are asserted by both languages. The prefix sits LEFT of
+// the '#' so it can never collide with the selector grammar on the right.
+const CAD_TOKEN_RE = /^\s*([^#\s]*)#([^\s]*)/;
 const OCCURRENCE_SELECTOR_RE = /^o((?:\d+)(?:\.\d+)*)$/;
 const OCCURRENCE_ENTITY_SELECTOR_RE = /^o((?:\d+)(?:\.\d+)*)\.([sfev])(\d+)$/;
 const ENTITY_SELECTOR_RE = /^([sfev])(\d+)$/;
@@ -348,19 +351,20 @@ export function parseCadRefToken(copyText) {
   if (!match) {
     return null;
   }
-  const selectorText = String(match[1] || "").trim();
+  // The prefix is kept RAW: the agent that resolves it back to a file does a literal suffix
+  // match against project paths, so normalizing (which would strip `.step.py`) breaks it.
+  const cadPath = String(match[1] || "").trim();
+  const selectorText = String(match[2] || "").trim();
   return {
     token: match[0],
-    cadPath: "",
+    cadPath,
     selectors: normalizeCadRefSelectors(selectorText)
   };
 }
 
 export function buildCadRefToken({ cadPath = "", selector = "", selectors } = {}) {
-  void cadPath;
+  const prefix = String(cadPath || "").trim();
   const selectorList = selectors !== undefined ? sortCadRefSelectors(selectors) : sortCadRefSelectors(selector ? [selector] : []);
-  if (!selectorList.length) {
-    return "#";
-  }
-  return `#${selectorList.join(",")}`;
+  // `<prefix>#` with no selectors is meaningful -- it names a whole file.
+  return `${prefix}#${selectorList.join(",")}`;
 }

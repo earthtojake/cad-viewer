@@ -628,7 +628,8 @@ export function useCadAssets({
             }
             const occurrenceId = String(occurrence?.id || "").trim();
             return buildSelectorRuntime(bundle, {
-              copyCadPath: String(entry?.file || ""),
+              // The SUFP, not the full path: a copied ref should be compact.
+              copyCadPath: String(entry?.fileRefPrefix || ""),
               partId: isSingleComponentPart ? "" : occurrenceId,
               transform: occurrence?.transform || null,
               remapOccurrenceId: occurrenceId

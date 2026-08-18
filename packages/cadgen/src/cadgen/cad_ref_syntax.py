@@ -4,7 +4,12 @@ import re
 from dataclasses import dataclass
 
 
-CAD_TOKEN_RE = re.compile(r"^\s*#([^\s]*)")
+# `<file>#<selectors>`, where the file half is optional. The prefix is the shortest suffix of a
+# path that names exactly one entry -- usually just the filename -- and it exists so a ref stays
+# meaningful when it is pasted into a prompt that spans several files. It lives LEFT of the '#'
+# on purpose: the selector grammar owns everything to the right, so a prefix can never collide
+# with a label, its ':' qualifiers, or an entity's '.'.
+CAD_TOKEN_RE = re.compile(r"^\s*([^#\s]*)#([^\s]*)")
 OCCURRENCE_SELECTOR_RE = re.compile(r"^o((?:\d+)(?:\.\d+)*)$")
 OCCURRENCE_ENTITY_SELECTOR_RE = re.compile(r"^o((?:\d+)(?:\.\d+)*)\.([sfev])(\d+)$")
 ENTITY_SELECTOR_RE = re.compile(r"^([sfev])(\d+)$")
@@ -58,16 +63,89 @@ def parse_cad_tokens(text: str) -> list[ParsedToken]:
         match = CAD_TOKEN_RE.match(line)
         if match is None:
             continue
-        selector_text = str(match.group(1) or "")
+        # The prefix is kept RAW. `normalize_cad_path` strips `.step.py`, and the agent that
+        # resolves a prefix back to a file does so by literal suffix match against project
+        # paths -- normalizing here would break that contract.
+        cad_path = str(match.group(1) or "")
+        selector_text = str(match.group(2) or "")
         tokens.append(
             ParsedToken(
                 line=line_no,
                 token=match.group(0),
-                cad_path="",
+                cad_path=cad_path,
                 selectors=tuple(normalize_selector_list(selector_text)),
             )
         )
     return tokens
+
+
+def _path_segments(path: str) -> list[str]:
+    return [part for part in str(path or "").replace("\\", "/").split("/") if part]
+
+
+def path_has_suffix(path: str, suffix: str) -> bool:
+    """Does ``suffix`` name ``path``? Segment-aligned, never a substring match.
+
+    ``plate.stl`` names ``a/b/plate.stl``; ``late.stl`` names nothing. Mirrors ``pathHasSuffix``
+    in ``cadjs/lib/filePathSuffix.js``.
+    """
+    path_segments = _path_segments(path)
+    suffix_segments = _path_segments(suffix)
+    if not suffix_segments or len(suffix_segments) > len(path_segments):
+        return False
+    return path_segments[len(path_segments) - len(suffix_segments) :] == suffix_segments
+
+
+def _ref_display_candidates(display_name: str) -> set[str]:
+    """Every real path a displayed ref prefix could name.
+
+    A ref shows a ``.step.py`` generator as a bare stem, so ``bracket`` is what the Viewer emits
+    for ``bracket.step.py``. Every other file keeps its suffix and is already literal, which is
+    why only the bare form expands. Mirrors ``refDisplayName`` in ``cadjs/lib/filePathSuffix.js``.
+    """
+    name = str(display_name or "").strip()
+    if not name:
+        return set()
+    head, _, tail = name.rpartition("/")
+    prefix = f"{head}/" if head else ""
+    if "." not in tail:
+        return {f"{prefix}{tail}.step.py", f"{prefix}{tail}.stp.py"}
+    return set()
+
+
+def ensure_ref_file_matches(file_prefix: str, entry_target: str, *, source_label: str = "ref") -> None:
+    """Reject a ref whose file prefix names a file this command is not looking at.
+
+    Copied refs may carry a file prefix (``plate.stl#o1.2``) so they stay meaningful in a prompt
+    spanning several files. A CLI only ever inspects the entry it was given, so a prefix naming a
+    DIFFERENT file has to be an error: silently ignoring it would inspect the wrong file and
+    report a confident answer about geometry the user never asked about.
+
+    CLIs do not resolve prefixes to paths -- the agent does that, then passes the file and the
+    ref separately. See ``skills/cad/references/inspection-and-validation.md``.
+    """
+    prefix = str(file_prefix or "").strip()
+    if not prefix:
+        return
+    target = str(entry_target or "").strip()
+    if not target:
+        return
+    # Compared raw AND logical, because callers hand this different shapes of the same thing:
+    # a viewer prefix keeps its extension (`bracket.step.py`) while an entry's cad_path has
+    # already been reduced to its logical form (`models/parts/bracket`). Matching either way
+    # means `bracket.step.py`, `bracket.step` and `bracket` all name the same entry, which is
+    # the same equivalence normalize_cad_path exists to express.
+    candidates = {prefix, *_ref_display_candidates(prefix)}
+    candidates |= {normalize_cad_path(candidate) or candidate for candidate in set(candidates)}
+    targets = {target, normalize_cad_path(target) or target}
+    for candidate in candidates:
+        for entry in targets:
+            if path_has_suffix(entry, candidate):
+                return
+    raise ValueError(
+        f"{source_label} names file {prefix!r} but this command targets {target or '(none)'!r}; "
+        f"pass the file as the entry argument and the '#...' part as the ref"
+    )
 
 
 def normalize_cad_path(raw_cad_path: str) -> str | None:
@@ -206,7 +284,9 @@ def normalize_selector_list(raw_selector_list: str) -> list[str]:
 
 
 def build_cad_token(cad_path: str, selector: str = "") -> str:
-    _ = cad_path
-    if not selector:
-        return "#"
-    return f"#{selector}"
+    """Assemble `<file>#<selectors>`; the file half is omitted when empty.
+
+    `<prefix>#` with no selectors is meaningful -- it names a whole file.
+    """
+    prefix = str(cad_path or "").strip()
+    return f"{prefix}#{selector or ''}"
