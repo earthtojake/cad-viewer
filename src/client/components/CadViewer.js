@@ -236,7 +236,14 @@ const DEFAULT_DAMPING_FACTOR = 0.14;
 const DEFAULT_ZOOM_SPEED = 4.5;
 const COARSE_POINTER_ZOOM_SPEED = 1.6;
 const EXPLODED_VIEW_ANIMATION_DURATION_MS = 1000;
-const ACCELERATED_WHEEL_ZOOM_SPEED = 2.5;
+// 5.0, not 2.5. The r161 upgrade removed OrbitControls' divide-by-devicePixelRatio, and I
+// retuned this against a single mouse notch without checking what else runs through it. A
+// trackpad flick does: isTrackpadLikeWheelEvent only claims deltas under 20, and momentum
+// carries an ordinary two-finger scroll well past that, so most of a gesture lands here.
+// 2.5 halved it. 5.0 restores exactly what a Retina Mac had before r161 -- 0.95^(5*d/100) is
+// the same curve as the old 0.95^(10*d/200) -- and every display now gets that same curve
+// instead of only the 2x ones.
+const ACCELERATED_WHEEL_ZOOM_SPEED = 5.0;
 const TRACKPAD_PINCH_ZOOM_SPEED = 7;
 const COARSE_POINTER_PINCH_ZOOM_SPEED = 2.4;
 const CAMERA_TRANSITION_EASING = Object.freeze({
