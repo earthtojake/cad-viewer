@@ -170,7 +170,12 @@ def parse_selector(
     inherited_occurrence_id: str = "",
     inherited_label: str = "",
 ) -> ParsedSelector | None:
-    selector = str(raw_selector or "").strip().replace("#", "", 1)
+    # Only a LEADING "#" is the token marker. str.replace() takes the first "#"
+    # anywhere, splicing "o1#f2" into the label "o1f2"; the JS parser strips /^#/
+    # and leaves the rest opaque, and the two are one language.
+    selector = str(raw_selector or "").strip()
+    if selector.startswith("#"):
+        selector = selector[1:]
     if not selector:
         return None
 

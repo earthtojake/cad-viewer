@@ -71,7 +71,12 @@ def build_label_aliases(rows: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     """
     ordered: list[tuple[str, str]] = []
     for row in rows:
-        occurrence_id = str(row.get("id") or "").strip()
+        # `occurrenceId` is the spelling the render package uses for the same
+        # field (cadjs/common/cadScene.js reads `part.id || part.occurrenceId`
+        # throughout), and buildLabelAliasMap accepts both. Reading only `id`
+        # here dropped those rows, so a label the viewer resolves had no alias
+        # in the CLI.
+        occurrence_id = str(row.get("id") or row.get("occurrenceId") or "").strip()
         if not occurrence_id:
             continue
         candidate = _label_candidate(row.get("name"))

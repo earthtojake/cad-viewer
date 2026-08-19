@@ -166,6 +166,33 @@
       "ordinal": null,
       "label": "frame_rail",
       "canonical": "frame_rail"
+    },
+    {
+      "phase": 0,
+      "why": "only a LEADING '#' is the token marker; a later one is not a separator",
+      "selector": "o1#f2",
+      "selectorType": "opaque",
+      "occurrenceId": "",
+      "ordinal": null,
+      "canonical": "o1#f2"
+    },
+    {
+      "phase": 0,
+      "why": "a trailing '#' is part of the selector text, not something to drop",
+      "selector": "o1#",
+      "selectorType": "opaque",
+      "occurrenceId": "",
+      "ordinal": null,
+      "canonical": "o1#"
+    },
+    {
+      "phase": 1,
+      "why": "an interior '#' must not splice two halves into one label",
+      "selector": "eye#shank",
+      "selectorType": "opaque",
+      "occurrenceId": "",
+      "ordinal": null,
+      "canonical": "eye#shank"
     }
   ],
   "inheritanceCases": [
@@ -377,6 +404,25 @@
       "aliases": {
         "damper_body": "o1.1",
         "pressure_tube": "o1.1.1"
+      },
+      "ambiguous": {}
+    },
+    {
+      "phase": 1,
+      "why": "a row may carry the render package's `occurrenceId` spelling instead of `id`",
+      "rows": [
+        {
+          "occurrenceId": "o1.1",
+          "name": "eye_shank"
+        },
+        {
+          "id": "o1.2",
+          "name": "pressure_tube"
+        }
+      ],
+      "aliases": {
+        "eye_shank": "o1.1",
+        "pressure_tube": "o1.2"
       },
       "ambiguous": {}
     }
