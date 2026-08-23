@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from math import isfinite
 import posixpath
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
