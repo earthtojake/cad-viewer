@@ -6,6 +6,7 @@ import math
 from typing import Any
 
 from . import lookup
+from .lookup import table_rows as _table_rows
 
 
 AXIS_NAMES = ("x", "y", "z")
@@ -501,19 +502,6 @@ def major_planar_face_groups(
 
     result.sort(key=lambda item: (-float(item["totalArea"]), str(item["axis"]), float(item["coordinate"])))
     return result[: max(int(limit), 0)]
-
-
-def _table_rows(manifest: dict[str, Any], table_name: str, columns_name: str) -> list[dict[str, Any]]:
-    columns = manifest.get("tables", {}).get(columns_name)
-    rows = manifest.get(table_name)
-    if not isinstance(columns, list) or not isinstance(rows, list):
-        return []
-    materialized: list[dict[str, Any]] = []
-    for row in rows:
-        if not isinstance(row, list):
-            continue
-        materialized.append({str(columns[index]): row[index] for index in range(min(len(columns), len(row)))})
-    return materialized
 
 
 def _stable_hash(payload: object) -> str:

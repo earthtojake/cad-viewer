@@ -22,6 +22,8 @@ from cadgen._internal.glb_mesh_payload import (
 )
 from cadgen._internal.glb_topology import (
     GLB_VERSION,
+    _read_legacy_topology_manifest,
+    read_step_display_edge_manifest_from_glb,
     STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
     STEP_EDGE_CLASS_ATTRIBUTE,
     STEP_EDGE_SURFACE_CLASS_CODES,
@@ -1042,16 +1044,6 @@ def _legacy_topology_manifest_path_for_glb(glb_path: Path) -> Path | None:
     return resolved.parent / "topology.json"
 
 
-def _read_legacy_topology_manifest(glb_path: Path) -> dict[str, Any] | None:
-    manifest_path = _legacy_topology_manifest_path_for_glb(glb_path)
-    if manifest_path is None or not manifest_path.is_file():
-        return None
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    return manifest if isinstance(manifest, dict) else None
-
 
 def _read_legacy_topology_bundle(glb_path: Path) -> SelectorBundle | None:
     manifest = _read_legacy_topology_manifest(glb_path)
@@ -1107,7 +1099,14 @@ def read_step_topology_bundle_from_glb(glb_path: Path) -> SelectorBundle | None:
     return SelectorBundle(manifest=manifest, buffers=buffers)
 
 
+# Re-exported from its single home for callers (tests included) that import it
+# from this module; glb_topology owns the implementation.
 def read_step_topology_index_from_glb(glb_path: Path) -> dict[str, Any] | None:
+    # NOT the same function as glb_topology.read_step_topology_index_from_glb, though
+    # the file branches below look alike: for a component-GLB package DIRECTORY this
+    # returns the VALIDATED package descriptor (read_package_descriptor), while
+    # glb_topology's variant reads raw assembly.json. Freshness gates here want the
+    # descriptor's schema/kind validation; keep the two distinct on purpose.
     if glb_path.is_dir():
         # Component-GLB package: the canonical assembly artifact is a directory whose
         # assembly.json IS the index manifest (provenance + occurrences). Return it so
@@ -1128,27 +1127,6 @@ def read_step_topology_index_from_glb(glb_path: Path) -> dict[str, Any] | None:
             binary_offset,
             binary_length,
             extension.get("indexView"),
-        )
-        manifest = json.loads(_read_file_range(glb_path, manifest_offset, manifest_length).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError, json.JSONDecodeError, OSError):
-        return None
-    return manifest if isinstance(manifest, dict) else None
-
-
-def read_step_display_edge_manifest_from_glb(glb_path: Path) -> dict[str, Any] | None:
-    try:
-        gltf, binary_offset, binary_length = _read_glb_json_and_bin_location(glb_path)
-    except (OSError, ValueError, json.JSONDecodeError):
-        return None
-    extension = _step_topology_extension(gltf)
-    if extension is None:
-        return None
-    try:
-        manifest_offset, manifest_length = _buffer_view_range(
-            gltf,
-            binary_offset,
-            binary_length,
-            extension.get("edgeView", extension.get("displayEdgeView")),
         )
         manifest = json.loads(_read_file_range(glb_path, manifest_offset, manifest_length).decode("utf-8"))
     except (ValueError, UnicodeDecodeError, json.JSONDecodeError, OSError):

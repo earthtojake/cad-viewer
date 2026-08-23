@@ -190,10 +190,21 @@ def _try_inject_text_to_cad_step_metadata_tail(
     if not data_end:
         return False
 
-    header_text = tail_text if is_full_file else _read_step_head_text(step_path)
+    # Decide only from text this path has actually READ. The tail used to be the sole
+    # source of the max entity id while the refs came from the head, so a file whose
+    # highest ids sit anywhere outside the tail got colliding injections. When head and
+    # tail overlap they cover the file and both contribute their max; when a middle
+    # exists that nobody scanned, bail to the whole-file rewrite instead of assuming
+    # ids are monotonic toward EOF.
+    header_text = tail_text
+    if not is_full_file:
+        header_text = _read_step_head_text(step_path)
+        scanned = len(tail_payload) + len(header_text)
+        if step_path.expanduser().resolve().stat().st_size > scanned:
+            return False
     product_definition_ref = _root_product_definition_ref(header_text)
     representation_context_ref = _shape_representation_context_ref(header_text)
-    max_entity_id = _max_entity_id(tail_text)
+    max_entity_id = max(_max_entity_id(tail_text), _max_entity_id(header_text))
     if not product_definition_ref or not representation_context_ref or max_entity_id <= 0:
         return False
 

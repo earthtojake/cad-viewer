@@ -208,19 +208,28 @@ def new_run_id() -> str:
 def probe(lock_path: Path | str) -> ProbeResult:
     """Is a peer holding ``lock_path``? Never blocks, never creates the file.
 
-    Opened READ-ONLY on purpose: the old probe opened ``a+b``, which materialised a
-    sentinel under ``__cadgen__`` for a model that had never been built, as a side effect
-    of a status GET. A missing sentinel means no run has ever held it, which is idle.
+    The open mode is per-backend, and both preserve the rule that a probe must not
+    materialise a sentinel for a model that has never been built (a missing sentinel
+    means no run has ever held it, which is idle):
+
+    * POSIX opens READ-ONLY (``rb``): ``flock`` works on any descriptor.
+    * The Windows backend MUST open READ-WRITE (``r+b``, which creates nothing):
+      ``msvcrt.locking`` region locks need a write-capable handle -- on the old
+      read-only open every probe failed with EBADF, which is not a contention errno,
+      so a mutex held by a live writer probed as degraded-idle; and when EBADF's
+      sibling EACCES did surface it read as contention forever. A permission failure
+      opening the existing mutex degrades rather than inventing either state.
     """
     if fcntl is None and msvcrt is None:
         return ProbeResult(held=False, degraded=True)
     path = mutex_path(lock_path)
     try:
-        handle = path.open("rb")
+        handle = path.open("rb" if fcntl is not None else "r+b")
     except FileNotFoundError:
         return ProbeResult(held=False, degraded=False)
     except OSError:
-        # Unreadable sentinel: we cannot tell, and must not claim a build is running.
+        # Unreadable or unwritable mutex (permissions, share conflict): we cannot
+        # tell whether a peer holds it, and must not claim either way.
         return ProbeResult(held=False, degraded=True)
     try:
         if fcntl is not None:

@@ -127,6 +127,12 @@ def assembly_package_current(step_path: Path) -> bool:
 
 
 def _component_id(source_hash: str) -> str:
+    # The cid is the first 64 bits of the content hash, not an accident of slicing:
+    # a package build holds dozens of components, so the birthday bound at 2^32
+    # distinct shapes is unreachable by ~9 orders of magnitude, and the hash is
+    # salted by STEP_PACKAGE_VERSION (see _content_hash_and_bytes) so an extractor
+    # change re-keys every cid at once. A collision would only merge two dedup
+    # entries within one build -- never a cross-package effect.
     return source_hash[:16]
 
 

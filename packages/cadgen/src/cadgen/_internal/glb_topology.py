@@ -302,6 +302,10 @@ def step_edge_surface_class_code(
         return STEP_EDGE_SURFACE_CLASS_CODES["tangent"]
     if flags & STEP_EDGE_FLAGS["HARD"] or visibility_class == STEP_EDGE_VISIBILITY_CLASSES["FEATURE"]:
         return STEP_EDGE_SURFACE_CLASS_CODES["feature"]
+    # Deliberate fallthrough, not a gap: an edge carrying none of the flags above
+    # (no continuity classification at all) renders as a feature edge, same as the
+    # explicit HARD/FEATURE branch above. This keeps EVERY classified edge in
+    # exactly one class.
     return STEP_EDGE_SURFACE_CLASS_CODES["feature"]
 
 
@@ -320,7 +324,7 @@ def _legacy_topology_manifest_path_for_glb(glb_path: Path) -> Path | None:
     return resolved.parent / "topology.json"
 
 
-def _read_legacy_topology_manifest(glb_path: Path) -> dict[str, Any] | None:
+def read_legacy_topology_manifest(glb_path: Path) -> dict[str, Any] | None:
     manifest_path = _legacy_topology_manifest_path_for_glb(glb_path)
     if manifest_path is None or not manifest_path.is_file():
         return None
@@ -332,7 +336,7 @@ def _read_legacy_topology_manifest(glb_path: Path) -> dict[str, Any] | None:
 
 
 def _read_legacy_topology_bundle(glb_path: Path) -> SelectorBundle | None:
-    manifest = _read_legacy_topology_manifest(glb_path)
+    manifest = read_legacy_topology_manifest(glb_path)
     if manifest is None:
         return None
     buffers: dict[str, array] = {}
@@ -385,7 +389,15 @@ def read_step_topology_bundle_from_glb(glb_path: Path) -> SelectorBundle | None:
     return SelectorBundle(manifest=manifest, buffers=buffers)
 
 
+# Kept as the historical private name alongside the public single home; glb.py
+# imports the public one instead of carrying a byte-identical twin.
+_read_legacy_topology_manifest = read_legacy_topology_manifest
+
 def read_step_topology_index_from_glb(glb_path: Path) -> dict[str, Any] | None:
+    # NOT the same function as glb.read_step_topology_index_from_glb, though the file
+    # branches look alike: this one reads RAW assembly.json for a package directory,
+    # while glb.py's returns the VALIDATED package descriptor. Selector/lookup callers
+    # want the plain document; keep the two distinct on purpose.
     # Dir-aware branch: a render package DIRECTORY carries its topology index
     # as the package descriptor (assembly.json). The generated-model freshness
     # gate (_generated_assembly_glb_closure_current) reads the recorded source
@@ -404,10 +416,10 @@ def read_step_topology_index_from_glb(glb_path: Path) -> dict[str, Any] | None:
     try:
         gltf, binary_offset, binary_length = _read_glb_json_and_bin_location(glb_path)
     except (OSError, ValueError, json.JSONDecodeError):
-        return _read_legacy_topology_manifest(glb_path)
+        return read_legacy_topology_manifest(glb_path)
     extension = _step_topology_extension(gltf)
     if extension is None:
-        return _read_legacy_topology_manifest(glb_path)
+        return read_legacy_topology_manifest(glb_path)
     try:
         manifest_offset, manifest_length = _buffer_view_range(
             gltf,

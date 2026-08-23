@@ -7,7 +7,11 @@ from typing import Any
 from cadgen import cad_ref_syntax as syntax
 
 
-def _table_rows(manifest: dict[str, Any], table_name: str, columns_name: str) -> list[dict[str, Any]]:
+def table_rows(manifest: dict[str, Any], table_name: str, columns_name: str) -> list[dict[str, Any]]:
+    """Materialize one manifest table into dicts keyed by its declared column names.
+
+    Single home for this shape walk (analysis.py reuses it); it was duplicated
+    byte-for-byte between the two modules until the drift was flagged in review."""
     columns = manifest.get("tables", {}).get(columns_name)
     rows = manifest.get(table_name)
     if not isinstance(columns, list) or not isinstance(rows, list):
@@ -18,6 +22,9 @@ def _table_rows(manifest: dict[str, Any], table_name: str, columns_name: str) ->
             continue
         materialized.append({str(columns[index]): row[index] for index in range(min(len(columns), len(row)))})
     return materialized
+
+
+_table_rows = table_rows
 
 
 def _buffer_rows(buffers: Mapping[str, Any] | None, view_name: object) -> list[int]:
