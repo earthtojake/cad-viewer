@@ -57,8 +57,11 @@ test("rendered file sheet sections include closed-by-default sections", () => {
     "status",
     "tree",
     "reference",
-    "measurements",
+    // Parameters sits directly after Reference: it is the one tab in this strip that
+    // CHANGES the geometry, so it takes the position nearest the default rather than
+    // trailing the readouts.
     "parameters",
+    "measurements",
     "display"
   ]);
   assert.deepEqual(renderedFileSheetSectionIds("srdf"), ["joints"]);

@@ -54,10 +54,13 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
         ...status,
         FILE_SHEET_SECTION_IDS.STEP_TREE,
         FILE_SHEET_SECTION_IDS.STEP_REFERENCE,
-        // Measurements follows Reference: both are readouts about geometry the
+        // Parameters sits directly after Reference when the model has a sidecar: it is the
+        // one tab here that CHANGES the geometry, so it earns the position nearest the
+        // default rather than trailing the readouts.
+        ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
+        // Measurements then follows: it and Reference are both readouts about geometry the
         // user has picked, as against the Tree's inventory of what is in the file.
         FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS,
-        ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
         FILE_SHEET_SECTION_IDS.THEME_DISPLAY
       ];
     case "urdf":

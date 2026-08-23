@@ -13,6 +13,7 @@ import {
   FileSheetSliderField,
   FileSheetStatusText,
   FileSheetSubsection,
+  FileSheetBooleanToggle,
   FileSheetToggleRow,
   FileSheetValueInput,
   parseFileSheetNumberInput
@@ -130,115 +131,20 @@ export default function ParameterControlsSection({
         <FileSheetStatusText tone="error" className="py-2">{error}</FileSheetStatusText>
       ) : null}
 
-      {definition && showEnableToggle ? (
-        <FileSheetSubsection title="Module">
-          <FileSheetToggleRow
-            label={enableLabel}
-            checked={enabled}
-            onCheckedChange={(checked) => runtime?.onEnabledChange?.(checked)}
-            ariaLabel={enableAriaLabel || enableLabel}
-          />
-        </FileSheetSubsection>
-      ) : null}
-
-      {/* Playback is its own group above the parameters: it acts on time, not
-          on the model's inputs, and it is absent for most models. */}
-      {definition && animations.length ? (
-        <FileSheetSubsection title="Animation">
-          {animations.length > 1 ? (
-            // The section's primary control: which clip is selected reframes the
-            // transport and the time/speed rows beneath it.
-            <FileSheetSelectRow
-              stacked
-              label="Clip"
-              value={String(animationState.activeId || animations[0]?.id || "")}
-              onValueChange={(nextValue) => runtime?.onAnimationSelect?.(nextValue)}
-              disabled={!enabled}
-              ariaLabel={animationAriaLabel}
-              options={animations.map((animation) => ({
-                value: animation.id,
-                label: animation.label
-              }))}
+      {definition ? (
+        <FileSheetSubsection
+          title={title}
+          // The module gate rides this heading on the shared right-edge control axis rather
+          // than owning a "Module" section for one switch. It gates these rows and the
+          // Animation section below.
+          trailing={showEnableToggle ? (
+            <FileSheetBooleanToggle
+              checked={enabled}
+              onCheckedChange={(checked) => runtime?.onEnabledChange?.(checked)}
+              ariaLabel={enableAriaLabel || enableLabel}
             />
           ) : null}
-          {/* Transport sits under the clip it drives. "Restart" is deliberately
-              not called "Reset": it returns playback to zero, where the tab's
-              one Reset returns the parameters to their defaults. */}
-          <FileSheetButtonRow columns={2}>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={cn(compactButtonClasses, "justify-center")}
-              onClick={() => runtime?.onAnimationPlayToggle?.()}
-              disabled={!enabled}
-              aria-label={`${animationState.playing ? "Pause" : "Play"} ${label} animation`}
-              title={`${animationState.playing ? "Pause" : "Play"} ${label} animation`}
-            >
-              {animationState.playing ? (
-                <Pause className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-              ) : (
-                <Play className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-              )}
-              <span>{animationState.playing ? "Pause" : "Play"}</span>
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={cn(compactButtonClasses, "justify-center")}
-              onClick={() => runtime?.onAnimationReset?.()}
-              disabled={!enabled}
-              aria-label={`Restart ${label} animation`}
-              title="Restart"
-            >
-              <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
-              <span>Restart</span>
-            </Button>
-          </FileSheetButtonRow>
-          <FileSheetToggleRow
-            label="Loop"
-            checked={animationState.loopEnabled !== false}
-            onCheckedChange={(checked) => runtime?.onAnimationLoopToggle?.(checked)}
-            disabled={!enabled}
-            ariaLabel="Loop animation playback"
-          />
-          <TimeControl
-            animationState={animationState}
-            duration={animationDuration}
-            enabled={enabled}
-            onScrub={runtime?.onAnimationScrub}
-            label={label}
-          />
-          <FileSheetSliderField
-            label="Speed"
-            value={`${formatControlNumber(animationState.speed || 1)}x`}
-            onValueCommit={(nextValue) => {
-              runtime?.onAnimationSpeedChange?.(
-                parseAnimationSpeedInput(nextValue, animationState.speed || 1)
-              );
-            }}
-            valueInputProps={{
-              disabled: !enabled,
-              ariaLabel: `${label} animation speed value`
-            }}
-          >
-            <Slider
-              className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
-              value={[Number(animationState.speed) || 1]}
-              min={PARAMETER_ANIMATION_SPEED_MIN}
-              max={PARAMETER_ANIMATION_SPEED_MAX}
-              step={0.1}
-              onValueChange={(nextValue) => runtime?.onAnimationSpeedChange?.(nextValue?.[0] ?? 1)}
-              disabled={!enabled}
-              aria-label={`${label} animation speed`}
-            />
-          </FileSheetSliderField>
-        </FileSheetSubsection>
-      ) : null}
-
-      {definition ? (
-        <FileSheetSubsection title={title}>
+        >
           {!parameters.length ? (
             <FileSheetStatusText>{noParametersLabel}</FileSheetStatusText>
           ) : null}
@@ -371,6 +277,102 @@ export default function ParameterControlsSection({
               </Button>
             </FileSheetButtonRow>
           ) : null}
+        </FileSheetSubsection>
+      ) : null}
+
+      {/* Playback follows the parameters: it acts on time rather than on the model's own
+          inputs, and it is absent for most models. */}
+      {definition && animations.length ? (
+        <FileSheetSubsection title="Animation">
+          {animations.length > 1 ? (
+            // The section's primary control: which clip is selected reframes the
+            // transport and the time/speed rows beneath it.
+            <FileSheetSelectRow
+              stacked
+              label="Clip"
+              value={String(animationState.activeId || animations[0]?.id || "")}
+              onValueChange={(nextValue) => runtime?.onAnimationSelect?.(nextValue)}
+              disabled={!enabled}
+              ariaLabel={animationAriaLabel}
+              options={animations.map((animation) => ({
+                value: animation.id,
+                label: animation.label
+              }))}
+            />
+          ) : null}
+          {/* Transport sits under the clip it drives. "Restart" is deliberately
+              not called "Reset": it returns playback to zero, where the tab's
+              one Reset returns the parameters to their defaults. */}
+          <FileSheetButtonRow columns={2}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn(compactButtonClasses, "justify-center")}
+              onClick={() => runtime?.onAnimationPlayToggle?.()}
+              disabled={!enabled}
+              aria-label={`${animationState.playing ? "Pause" : "Play"} ${label} animation`}
+              title={`${animationState.playing ? "Pause" : "Play"} ${label} animation`}
+            >
+              {animationState.playing ? (
+                <Pause className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              ) : (
+                <Play className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              )}
+              <span>{animationState.playing ? "Pause" : "Play"}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={cn(compactButtonClasses, "justify-center")}
+              onClick={() => runtime?.onAnimationReset?.()}
+              disabled={!enabled}
+              aria-label={`Restart ${label} animation`}
+              title="Restart"
+            >
+              <RotateCcw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />
+              <span>Restart</span>
+            </Button>
+          </FileSheetButtonRow>
+          <FileSheetToggleRow
+            label="Loop"
+            checked={animationState.loopEnabled !== false}
+            onCheckedChange={(checked) => runtime?.onAnimationLoopToggle?.(checked)}
+            disabled={!enabled}
+            ariaLabel="Loop animation playback"
+          />
+          <TimeControl
+            animationState={animationState}
+            duration={animationDuration}
+            enabled={enabled}
+            onScrub={runtime?.onAnimationScrub}
+            label={label}
+          />
+          <FileSheetSliderField
+            label="Speed"
+            value={`${formatControlNumber(animationState.speed || 1)}x`}
+            onValueCommit={(nextValue) => {
+              runtime?.onAnimationSpeedChange?.(
+                parseAnimationSpeedInput(nextValue, animationState.speed || 1)
+              );
+            }}
+            valueInputProps={{
+              disabled: !enabled,
+              ariaLabel: `${label} animation speed value`
+            }}
+          >
+            <Slider
+              className={FILE_SHEET_PRECISION_SLIDER_CLASSES}
+              value={[Number(animationState.speed) || 1]}
+              min={PARAMETER_ANIMATION_SPEED_MIN}
+              max={PARAMETER_ANIMATION_SPEED_MAX}
+              step={0.1}
+              onValueChange={(nextValue) => runtime?.onAnimationSpeedChange?.(nextValue?.[0] ?? 1)}
+              disabled={!enabled}
+              aria-label={`${label} animation speed`}
+            />
+          </FileSheetSliderField>
         </FileSheetSubsection>
       ) : null}
     </div>

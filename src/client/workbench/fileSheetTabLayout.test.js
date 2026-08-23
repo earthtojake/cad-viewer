@@ -243,3 +243,33 @@ test("activating measurements makes it the bottom pane's live tab", () => {
   // Activating it must not disturb whatever the other pane was showing.
   assert.equal(top.activeId, "tree");
 });
+
+test("a drop lands where the indicator promised, including the last slot", () => {
+  // The drop index counts slots in the strip AS DISPLAYED, which still shows the tab being
+  // dragged. moveFileSheetTab removes it before splicing, so every slot right of where it
+  // started has shifted left by one. Reading the index literally moved a rightward drag one
+  // slot too far, and the end-of-strip clamp hid it at the only position with nowhere to
+  // overshoot to -- which is why it surfaced as "drag to the last spot, land second-last".
+  const tabs = ["tree", "reference", "parameters", "measurements", "display"];
+  const arrangement = { split: false, top: [...tabs], bottom: [], ratio: 0.5 };
+
+  for (const id of tabs) {
+    for (let slot = 0; slot <= tabs.length; slot += 1) {
+      const want = tabs.filter((value) => value !== id);
+      const from = tabs.indexOf(id);
+      want.splice(slot > from ? slot - 1 : slot, 0, id);
+      const got = moveFileSheetTab(arrangement, "step", id, FILE_SHEET_TAB_PANES.TOP, slot).top;
+      assert.deepEqual(got, want, `dragging ${id} to slot ${slot}`);
+    }
+  }
+});
+
+test("dropping any tab past the last slot puts it last", () => {
+  const tabs = ["tree", "reference", "parameters", "measurements", "display"];
+  const arrangement = { split: false, top: [...tabs], bottom: [], ratio: 0.5 };
+  for (const id of tabs) {
+    const top = moveFileSheetTab(arrangement, "step", id, FILE_SHEET_TAB_PANES.TOP, tabs.length).top;
+    assert.equal(top[top.length - 1], id, `${id} should land last`);
+    assert.equal(top.length, tabs.length, "no tab lost or duplicated");
+  }
+});

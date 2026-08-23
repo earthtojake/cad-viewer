@@ -598,6 +598,16 @@ export default function StepFileSheet({
   const hasAssemblyTree = isAssemblyView || elideRootTreeRow
     ? visibleRows.length > 0
     : visibleRows.some((row) => row?.hasChildren);
+  // The tree header counts what the file holds at its TOP level, the number a user reads as
+  // "how many parts is this". Not the flattened row count, which includes every expanded
+  // child and would change under them as they open nodes.
+  const topLevelPartCount = useMemo(
+    () => visibleRows.filter((row) => Number(row?.depth || 0) === 0).length,
+    [visibleRows]
+  );
+  // Show All renders only when something is hidden, so a fully visible tree keeps a header
+  // with nothing to click.
+  const hasHiddenTreeRows = hiddenTreeRowIds.size > 0;
   const hasMateRows = assemblyMateRows.length > 0;
   const showInstancesLabel = hasMateRows;
   const showMateSections = hasMateRows;
@@ -761,6 +771,26 @@ export default function StepFileSheet({
                   }
                 }}
               >
+              {hasAssemblyTree ? (
+                <div className="flex items-center justify-between gap-2 pr-1">
+                  <div className={treeGroupLabelClasses} role="presentation">
+                    Assembly
+                    <span className="ml-1.5 tabular-nums text-sidebar-foreground/35">
+                      {topLevelPartCount}
+                    </span>
+                  </div>
+                  {hasHiddenTreeRows ? (
+                    <button
+                      type="button"
+                      className="rounded-sm px-1.5 py-0.5 text-[10px] text-sidebar-foreground/50 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                      onClick={() => showAllHiddenParts?.()}
+                    >
+                      Show All
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
+
               {showInstancesLabel ? (
                 <div className={treeGroupLabelClasses} role="presentation">
                   Instances
@@ -1298,7 +1328,11 @@ export default function StepFileSheet({
       )
     },
     buildStepReferenceTab({ references: selectedReferences }),
-    measurementsSection,
+    // Parameters sits directly after Reference, ahead of the readouts: it is the one tab in
+    // this strip that CHANGES the geometry, so it takes the position nearest the default.
+    // This array is what orders the tab strip; renderedFileSheetSectionIds decides which
+    // sections exist, and the two have to agree.
+    //
     // The parameters tab is the shared ParameterControlsSection; the only
     // STEP-specific part is the time control, which tracks live playback.
     buildParameterControlsTab({
@@ -1312,6 +1346,7 @@ export default function StepFileSheet({
       resetTitle: "Reset STEP parameters",
       TimeControl: StepModuleAnimationTimeControl
     }),
+    measurementsSection,
     ...themeTabs,
     // "Issues" is a diagnostic shown only when there are warnings/errors, so it trails the
     // content + display tabs as the last item in the top section (null when there are none;

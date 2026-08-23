@@ -183,9 +183,17 @@ export function moveFileSheetTab(arrangement, kind, sectionId, targetPane, targe
   let bottom = arrangementPaneList(arrangement, FILE_SHEET_TAB_PANES.BOTTOM).filter((value) => value !== id);
 
   const target = pane === FILE_SHEET_TAB_PANES.TOP ? top : bottom;
-  const index = Number.isFinite(Number(targetIndex))
-    ? Math.min(Math.max(Math.trunc(Number(targetIndex)), 0), target.length)
+  // targetIndex counts slots in the strip AS DISPLAYED, which still shows the tab being
+  // dragged. `target` has already had it removed, so every slot to the right of where it
+  // started has shifted left by one. Without this, dragging a tab rightwards lands it one
+  // slot further right than the drop indicator promised, and the clamp below hid it at the
+  // end of the strip -- the only position where overshooting has nowhere to go.
+  const sourceIndex = arrangementPaneList(arrangement, pane).indexOf(id);
+  const requested = Number.isFinite(Number(targetIndex))
+    ? Math.max(Math.trunc(Number(targetIndex)), 0)
     : target.length;
+  const shifted = sourceIndex >= 0 && requested > sourceIndex ? requested - 1 : requested;
+  const index = Math.min(shifted, target.length);
   target.splice(index, 0, id);
 
   const ratio = clampSplitRatio(arrangement?.ratio);
