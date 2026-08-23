@@ -15,7 +15,20 @@ export const KEYBOARD_POLAR_EPSILON = 0.02;
 export const VIEW_PLANE_ACTIVE_DOT_THRESHOLD = 0.994;
 export const VIEW_PLANE_TRANSITION_MS = 280;
 export const VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD = 0.9999;
-export const VIEW_PLANE_POLE_DIRECTION_NUDGE = 0.02;
+// How far off the pole a top/bottom view sits. The camera's `up` is ALWAYS world up, so the
+// orbit axis never changes; that makes looking straight down it degenerate, because `lookAt`
+// cannot build a basis when up is parallel to the view direction. This is the offset that
+// keeps the basis well defined.
+//
+// It is bounded on both sides. Below ~1e-6 it meets Spherical.makeSafe()'s own EPS, which
+// OrbitControls applies on every update, and the azimuth stops being well defined. Above about
+// 1e-3 it becomes visible: an orthographic top view projects parallel, so vertical faces that
+// should collapse to nothing acquire width. At 1e-4 the error is 0.0057 degrees, a tenth of a
+// pixel across a 1000px viewport, while sitting 100x clear of makeSafe.
+//
+// It was 0.02 (1.146 degrees, 20px across that viewport), which is what made a "top" view
+// visibly not top-down.
+export const VIEW_PLANE_POLE_DIRECTION_NUDGE = 1e-4;
 export const DEFAULT_PERSPECTIVE_DIRECTION_DOT_THRESHOLD = 0.999;
 export const DEFAULT_PERSPECTIVE_UP_DOT_THRESHOLD = 0.999;
 export const DEFAULT_VIEW_DIRECTION = Object.freeze([2.1, -1.65, 1.08]);
@@ -276,6 +289,66 @@ export function stepKeyboardOrbit(runtime, timestamp) {
     axes.azimuth * KEYBOARD_ORBIT_SPEED_RAD_PER_SEC * deltaSeconds,
     axes.polar * KEYBOARD_ORBIT_SPEED_RAD_PER_SEC * deltaSeconds
   );
+}
+
+/**
+ * The camera basis for a view-plane preset: where to sit, and which way is up.
+ *
+ * Returns `{ direction, up }` as plain arrays. `up` is ALWAYS world up, so OrbitControls
+ * orbits about the same axis from every view; a preset that declares another up (the poles
+ * declare [0,1,0]) contributes only the screen orientation, by choosing which way the pole
+ * offset leans. Lived in CadViewer, where the invariant could not be tested.
+ */
+export function viewPlaneCameraBasis(preset, worldUp = WORLD_UP) {
+  const dir = normalizeVector3(preset?.direction);
+  const declaredUp = normalizeVector3(preset?.up);
+  const axis = normalizeVector3(worldUp);
+  if (!dir || !declaredUp || !axis) {
+    return null;
+  }
+  const alignment = dot3(dir, axis);
+  if (Math.abs(alignment) < VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD) {
+    return { direction: dir, up: axis };
+  }
+  // A pole view. Lean off the axis toward the preset's declared up, projected into the plane
+  // perpendicular to the orbit axis, so the resulting screen-up is the one the preset asked
+  // for rather than whatever lookAt's own degenerate fallback would pick.
+  let screenUp = subtractScaled3(declaredUp, axis, dot3(declaredUp, axis));
+  if (lengthSq3(screenUp) < 1e-12) {
+    screenUp = subtractScaled3([0, 1, 0], axis, axis[1]);
+  }
+  if (lengthSq3(screenUp) < 1e-12) {
+    screenUp = [1, 0, 0];
+  }
+  screenUp = normalizeVector3(screenUp);
+  const poleSign = alignment >= 0 ? 1 : -1;
+  const leaned = normalizeVector3(
+    subtractScaled3(dir, screenUp, poleSign * VIEW_PLANE_POLE_DIRECTION_NUDGE)
+  );
+  return { direction: leaned, up: axis };
+}
+
+function normalizeVector3(value) {
+  if (!Array.isArray(value) || value.length < 3) {
+    return null;
+  }
+  const x = Number(value[0]) || 0;
+  const y = Number(value[1]) || 0;
+  const z = Number(value[2]) || 0;
+  const length = Math.sqrt(x * x + y * y + z * z);
+  return length > 1e-9 ? [x / length, y / length, z / length] : null;
+}
+
+function dot3(a, b) {
+  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+function lengthSq3(a) {
+  return a[0] * a[0] + a[1] * a[1] + a[2] * a[2];
+}
+
+function subtractScaled3(a, b, scale) {
+  return [a[0] - b[0] * scale, a[1] - b[1] * scale, a[2] - b[2] * scale];
 }
 
 export function viewPlaneOrientationEqual(a, b, epsilon = 1e-4) {

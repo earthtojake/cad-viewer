@@ -190,9 +190,8 @@ import {
   VIEW_PLANE_DEFAULT_PRESET,
   VIEW_PLANE_FACE_BY_ID,
   VIEW_PLANE_FACES,
-  VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD,
-  VIEW_PLANE_POLE_DIRECTION_NUDGE,
   VIEW_PLANE_TRANSITION_MS,
+  viewPlaneCameraBasis,
   viewPlaneOrientationEqual,
   viewportFitScale,
   WORLD_UP
@@ -1408,31 +1407,15 @@ function transitionCameraToViewPreset(runtime, preset) {
     runtime.controls.minDistance || 0.01,
     runtime.controls.maxDistance || Infinity
   );
-  const nextDirection = new runtime.THREE.Vector3(...preset.direction);
-  if (nextDirection.lengthSq() < 1e-6) {
+  // The basis maths lives in viewportCameraKit so the "up is always world up" invariant is
+  // testable without mounting a viewer. It returns world up for EVERY preset, so the orbit
+  // axis is the same from any view.
+  const basis = viewPlaneCameraBasis(preset, WORLD_UP);
+  if (!basis) {
     return false;
   }
-  const nextUp = new runtime.THREE.Vector3(...preset.up);
-  if (nextUp.lengthSq() < 1e-6) {
-    return false;
-  }
-
-  nextDirection.normalize();
-  nextUp.normalize();
-  const worldUp = new runtime.THREE.Vector3(...WORLD_UP).normalize();
-  if (Math.abs(nextDirection.dot(worldUp)) >= VIEW_PLANE_POLE_DIRECTION_DOT_THRESHOLD) {
-    let screenUp = nextUp.clone().addScaledVector(worldUp, -nextUp.dot(worldUp));
-    if (screenUp.lengthSq() < 1e-6) {
-      screenUp = new runtime.THREE.Vector3(0, 1, 0).addScaledVector(worldUp, -worldUp.y);
-    }
-    if (screenUp.lengthSq() < 1e-6) {
-      screenUp = new runtime.THREE.Vector3(1, 0, 0);
-    }
-    screenUp.normalize();
-    const poleSign = nextDirection.dot(worldUp) >= 0 ? 1 : -1;
-    nextDirection.addScaledVector(screenUp, -poleSign * VIEW_PLANE_POLE_DIRECTION_NUDGE).normalize();
-    nextUp.copy(worldUp);
-  }
+  const nextDirection = new runtime.THREE.Vector3(...basis.direction);
+  const nextUp = new runtime.THREE.Vector3(...basis.up);
   runtime.cameraTransition = {
     startTime: performance.now(),
     durationMs: VIEW_PLANE_TRANSITION_MS,
