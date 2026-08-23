@@ -1,7 +1,5 @@
 import gifencDefault, {
-  GIFEncoder as exportedGifEncoder,
-  applyPalette as exportedApplyPalette,
-  quantize as exportedQuantize
+  GIFEncoder as exportedGifEncoder
 } from "gifenc";
 import * as THREE from "three";
 import {
@@ -16,10 +14,9 @@ import {
 import {
   orbitFrameOutputs
 } from "./implicitHeadlessOrbitFrames.js";
+import { encodeGifFrameImageData } from "./gifFrameEncoder.js";
 
 const GIFEncoder = exportedGifEncoder || gifencDefault?.GIFEncoder || gifencDefault;
-const quantize = exportedQuantize || gifencDefault?.quantize;
-const applyPalette = exportedApplyPalette || gifencDefault?.applyPalette;
 const implicitModuleCache = new Map();
 
 function isObject(value) {
@@ -260,30 +257,6 @@ async function dataUrlToImageData(dataUrl, width, height) {
 
 function shouldEncodeTransparentGif(job = {}, output = {}) {
   return Boolean(job.render?.transparent || output.render?.transparent);
-}
-
-function encodeGifFrameImageData(imageData, { transparent = false } = {}) {
-  if (!transparent) {
-    const palette = quantize(imageData.data, 256);
-    return {
-      indexed: applyPalette(imageData.data, palette),
-      palette,
-      transparent: false,
-      transparentIndex: 0
-    };
-  }
-
-  const palette = quantize(imageData.data, 256, {
-    format: "rgba4444",
-    oneBitAlpha: true
-  });
-  const transparentIndex = palette.findIndex((color) => Number(color?.[3]) <= 127);
-  return {
-    indexed: applyPalette(imageData.data, palette, "rgba4444"),
-    palette,
-    transparent: transparentIndex >= 0,
-    transparentIndex: Math.max(transparentIndex, 0)
-  };
 }
 
 function gifDataUrlFromEncoder(encoder) {

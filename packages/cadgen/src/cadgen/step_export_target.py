@@ -150,6 +150,13 @@ def _resolve_spec_and_scene(
     return spec, scene
 
 
+def _display_name_for(path: Path) -> str:
+    try:
+        return path.name
+    except Exception:  # noqa: BLE001 - a message must never be the thing that fails
+        return str(path)
+
+
 def _export_scene(
     fmt: str,
     spec: EntrySpec,
@@ -173,6 +180,21 @@ def _export_scene(
             )
             return out
         if spec.step_path is not None and spec.step_path.is_file():
+            # Only an IMPORTED source may be copied. A generated entry's step_path is its own
+            # previous output, so copying it here rewrites <name>.step with the geometry the
+            # last run produced while the caller reports outcome:built -- the failure in #308,
+            # where an edited generator kept exporting the old part and validate, snapshot and
+            # the Viewer all inherited it without a single error. A generated entry reaches
+            # this line only when the scene arrived without source_compound (loaded from cache
+            # rather than run), and the answer to that is to say so, not to copy.
+            if spec.source == "generated":
+                raise RuntimeError(
+                    f"{spec.source_ref}: refusing to export a generated model from its own "
+                    f"{_display_name_for(spec.step_path)} -- the scene carries no generator "
+                    "output to serialize, so the file on disk is the PREVIOUS build. Rerun "
+                    "with a fresh generation (delete the model's __cadgen__ cache if this "
+                    "persists) rather than trusting this export."
+                )
             if spec.step_path.resolve() != out.resolve():
                 shutil.copyfile(spec.step_path, out)
             return out

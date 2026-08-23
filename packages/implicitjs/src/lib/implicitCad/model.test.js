@@ -150,3 +150,56 @@ test("normalizeImplicitCadModel rejects modules without distance code", () => {
     /GLSL code/
   );
 });
+
+test("normalizeImplicitCadModel preserves a declared material", () => {
+  // Regression: normalizeMaterial() used to build from a fresh {} and return the
+  // defaults unconditionally, so a model's declared color/roughness/metalness were
+  // silently discarded and every model rendered the same default gray.
+  const model = normalizeImplicitCadModel({
+    schema: IMPLICIT_CAD_SCHEMA,
+    name: "Brass bushing",
+    bounds: [[-1, -1, -1], [1, 1, 1]],
+    material: { color: "#b5651d", roughness: 0.2, metalness: 0.9 },
+    glsl: `
+float sdf(vec3 p) { return length(p) - 1.0; }
+`
+  }, { sourceUrl: "/models/brass-bushing.implicit.js" });
+
+  assert.deepEqual(model.material, {
+    color: "#b5651d",
+    roughness: 0.2,
+    metalness: 0.9
+  });
+});
+
+test("a missing or out-of-range material still normalizes to the shared defaults", () => {
+  const model = normalizeImplicitCadModel({
+    schema: IMPLICIT_CAD_SCHEMA,
+    name: "Plain",
+    bounds: [[-1, -1, -1], [1, 1, 1]],
+    material: { color: "not-a-color", roughness: 7, metalness: -3 },
+    glsl: `
+float sdf(vec3 p) { return length(p) - 1.0; }
+`
+  }, { sourceUrl: "/models/plain.implicit.js" });
+
+  assert.deepEqual(model.material, {
+    color: "#f4f4f5",
+    roughness: 1,
+    metalness: 0
+  });
+
+  const bare = normalizeImplicitCadModel({
+    schema: IMPLICIT_CAD_SCHEMA,
+    name: "Bare",
+    bounds: [[-1, -1, -1], [1, 1, 1]],
+    glsl: `
+float sdf(vec3 p) { return length(p) - 1.0; }
+`
+  }, { sourceUrl: "/models/bare.implicit.js" });
+  assert.deepEqual(bare.material, {
+    color: "#f4f4f5",
+    roughness: 0.75,
+    metalness: 0.02
+  });
+});

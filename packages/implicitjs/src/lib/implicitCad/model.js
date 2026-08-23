@@ -321,12 +321,16 @@ function evaluateValue(value, context) {
   return typeof value === "function" ? value(context) : value;
 }
 
-function normalizeMaterial() {
-  const material = {};
+function normalizeMaterial(material) {
+  // The declared model material, finally read: this used to build from a fresh {}
+  // and return defaults unconditionally, so every model rendered the same default
+  // color no matter what its source declared (render.js feeds uSurfaceColor from
+  // this value).
+  const source = isObject(material) ? material : {};
   return {
-    color: normalizeHexColor(material.color, DEFAULT_COLOR),
-    roughness: Math.min(Math.max(finiteNumber(material.roughness, 0.75), 0), 1),
-    metalness: Math.min(Math.max(finiteNumber(material.metalness, 0.02), 0), 1),
+    color: normalizeHexColor(source.color, DEFAULT_COLOR),
+    roughness: Math.min(Math.max(finiteNumber(source.roughness, 0.75), 0), 1),
+    metalness: Math.min(Math.max(finiteNumber(source.metalness, 0.02), 0), 1),
   };
 }
 
@@ -532,7 +536,7 @@ function normalizeImplicitCadRuntimeModel(rawModel, definition, parameterValues 
     center,
     size,
     radius,
-    material: normalizeMaterial(),
+    material: normalizeMaterial(evaluateValue(model.material, context)),
     background: {},
     maxSteps: Math.max(16, Math.min(Math.floor(finiteNumber(evaluateValue(render.steps, context), 192)), 768)),
     maxDistance: finitePositiveNumber(evaluateValue(render.maxDistance, context), radius * 8),

@@ -2,27 +2,20 @@ import {
   cloneCameraVector,
   normalizeCameraZoom
 } from "../common/camera.js";
+// The projection enum/normalizer are shared primitives owned by implicitjs (single
+// source of truth); re-exported here so existing lib/perspective.js importers are
+// unaffected.
+export {
+  CAMERA_PROJECTION,
+  normalizeCameraProjection
+} from "implicitjs/common/displaySettings.js";
+import {
+  CAMERA_PROJECTION,
+  normalizeCameraProjection
+} from "implicitjs/common/displaySettings.js";
 
 function normalizePerspectiveMetadataValue(value) {
   return String(value || "").trim();
-}
-
-export const CAMERA_PROJECTION = Object.freeze({
-  PERSPECTIVE: "perspective",
-  ORTHOGRAPHIC: "orthographic"
-});
-
-export function normalizeCameraProjection(value, fallback = CAMERA_PROJECTION.PERSPECTIVE) {
-  const normalizedValue = String(value || "").trim().toLowerCase();
-  if (normalizedValue === CAMERA_PROJECTION.ORTHOGRAPHIC) {
-    return CAMERA_PROJECTION.ORTHOGRAPHIC;
-  }
-  if (normalizedValue === CAMERA_PROJECTION.PERSPECTIVE) {
-    return CAMERA_PROJECTION.PERSPECTIVE;
-  }
-  return fallback === CAMERA_PROJECTION.ORTHOGRAPHIC
-    ? CAMERA_PROJECTION.ORTHOGRAPHIC
-    : CAMERA_PROJECTION.PERSPECTIVE;
 }
 
 export function clonePerspectiveVector(vector) {
