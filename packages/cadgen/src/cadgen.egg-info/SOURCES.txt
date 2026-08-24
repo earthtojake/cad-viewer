@@ -8,6 +8,7 @@ src/cadgen/assembly.py
 src/cadgen/assembly_lookup.py
 src/cadgen/cad_ref_syntax.py
 src/cadgen/catalog.py
+src/cadgen/check_fonts.py
 src/cadgen/cli_logging.py
 src/cadgen/cli_progress.py
 src/cadgen/color.py
@@ -52,6 +53,7 @@ src/cadgen/_internal/cli_locking.py
 src/cadgen/_internal/component_package.py
 src/cadgen/_internal/drawing_package.py
 src/cadgen/_internal/file_metadata.py
+src/cadgen/_internal/font_scan.py
 src/cadgen/_internal/generation.py
 src/cadgen/_internal/generation_runner.py
 src/cadgen/_internal/generation_spec.py

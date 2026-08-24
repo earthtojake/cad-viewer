@@ -2,6 +2,23 @@
 
 from typing import TYPE_CHECKING
 
+# Before anything imports build123d, which every cadgen entry point eventually does:
+# build123d parses EVERY font in the system font folders at import time, with no
+# per-file guard, so one malformed file aborts the import and every cadgen command
+# with it (issue #322, upstream in build123d's register_folder). This hides
+# unparseable fonts from that one listing.
+#
+# It belongs here rather than in a launcher because the skill shims, the daemon's warm
+# workers and `python -m cadgen.X` children all reach cadgen by different routes, and a
+# fix that covered only one of them would leave the builds it spawns still broken.
+#
+# Cost where nothing is wrong: one str.endswith per glob call. CADGEN_FONT_GUARD=0
+# opts out.
+from cadgen._internal.font_scan import install_font_guard as _install_font_guard
+
+_install_font_guard()
+del _install_font_guard
+
 __all__ = [
     "AssemblyHelper",
     "srgb",
