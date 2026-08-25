@@ -35,6 +35,10 @@ VIEWER_SKIPPED_DIRECTORIES = frozenset(
         "__cadgen__", "__pycache__", "build", "coverage", "dist", "node_modules", "viewer",
     ]
 )
+# Outer guard for _collect_cad_source_files: a safe scan depth for any sane checkout,
+# far beyond what a real layout reaches, and enough to stop a symlink-loop crash even
+# if the visited-real-path tracking ever fails to see one.
+_SCAN_MAX_DEPTH = 64
 # --- per-folder __cadgen__ render-package paths ---
 # IMPORTED, not hand-copied. These were four literals under a "mirrors cadgen.catalog"
 # comment, and after the mirror test was deleted nothing cross-checked them -- so renaming
@@ -42,15 +46,28 @@ VIEWER_SKIPPED_DIRECTORIES = frozenset(
 # packages, with no test to catch it. Both modules are stdlib-only (verified: importing
 # either pulls in no OCP/build123d/ezdxf), so the server process stays free of a CAD runtime,
 # which is the invariant that actually matters here.
-from cadgen.catalog import CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME  # noqa: E402
-from cadgen._internal.drawing_package import (  # noqa: E402
-    DRAWING_DESCRIPTOR_NAME,
-    DRAWING_PACKAGE_KIND,
-)
-from cadgen._internal.implicit_package import (  # noqa: E402
-    IMPLICIT_DESCRIPTOR_NAME,
-    IMPLICIT_PACKAGE_KIND,
-)
+#
+# The imports are guarded so the scanner (and therefore the viewer server) stays importable
+# WITHOUT the cadgen package on the path -- its docstring promises exactly that. The
+# vendored fallbacks are pinned against the real cadgen values by the drift-guard test in
+# tests/test_scanner.py.
+try:
+    from cadgen.catalog import CADGEN_DIRNAME, CADGEN_MODELS_DIRNAME  # noqa: E402
+    from cadgen._internal.drawing_package import (  # noqa: E402
+        DRAWING_DESCRIPTOR_NAME,
+        DRAWING_PACKAGE_KIND,
+    )
+    from cadgen._internal.implicit_package import (  # noqa: E402
+        IMPLICIT_DESCRIPTOR_NAME,
+        IMPLICIT_PACKAGE_KIND,
+    )
+except ImportError:  # pragma: no cover - exercised in the drift-guard test path
+    CADGEN_DIRNAME = "__cadgen__"
+    CADGEN_MODELS_DIRNAME = "models"
+    DRAWING_DESCRIPTOR_NAME = "drawing.json"
+    DRAWING_PACKAGE_KIND = "drawing-package"
+    IMPLICIT_DESCRIPTOR_NAME = "implicit.json"
+    IMPLICIT_PACKAGE_KIND = "implicit-package"
 
 DXF_GENERATOR_SUFFIX = ".dxf.py"
 
@@ -137,8 +154,20 @@ def scan_relative_path(root_path: str, file_path: str) -> str:
 
 
 def path_is_inside(file_path: str, root_path: str) -> bool:
+    # Real paths exist here for ALIAS EQUALITY, never refusal: macOS's /var ->
+    # /private/var (and symlinked model folders) must compare as inside, so a path
+    # is contained when EITHER its lexical or its resolved location stays inside
+    # the root. Symlinked model directories are a feature -- the develop checkout
+    # itself runs a symlink layout, and pointing a link at a shared parts library
+    # outside the folder is a normal way to bring external content in. A link out
+    # of the open directory grants no reach the URL did not already grant: the
+    # viewer opens any absolute directory named in the page URL.
+    file_abs = os.path.abspath(file_path)
+    root_abs = os.path.abspath(root_path)
+    if relative_path_stays_inside_root(os.path.relpath(file_abs, root_abs)):
+        return True
     return relative_path_stays_inside_root(
-        os.path.relpath(os.path.abspath(file_path), os.path.abspath(root_path))
+        os.path.relpath(os.path.realpath(file_path), os.path.realpath(root_path))
     )
 
 
@@ -221,7 +250,22 @@ def _should_skip_directory(name: str) -> bool:
     return name in VIEWER_SKIPPED_DIRECTORIES or _is_hidden_name(name)
 
 
-def _collect_cad_source_files(root_path: str, result: list) -> list:
+def _collect_cad_source_files(root_path: str, result: list, visited: set | None = None, depth: int = 0) -> list:
+    # Directory symlinks are followed (entry.is_dir() resolves them), so a loop
+    # like `ln -s . loop` inside the root used to recurse until RecursionError on
+    # every scan. Visited REAL directory paths terminate loops (and aliases), and
+    # the depth cap is the outer guard. Walk order stays deterministic (sorted).
+    if depth > _SCAN_MAX_DEPTH:
+        return result
+    try:
+        real_root = os.path.realpath(root_path)
+    except OSError:
+        return result
+    if visited is None:
+        visited = set()
+    if real_root in visited:
+        return result
+    visited.add(real_root)
     try:
         entries = sorted(os.scandir(root_path), key=lambda e: e.name)
     except OSError:
@@ -230,7 +274,9 @@ def _collect_cad_source_files(root_path: str, result: list) -> list:
         entry_path = os.path.join(root_path, entry.name)
         if entry.is_dir():
             if not _should_skip_directory(entry.name):
-                _collect_cad_source_files(entry_path, result)
+                # Directory symlinks are followed on purpose: symlinked model folders
+                # are how external content (a shared parts library) joins a workspace.
+                _collect_cad_source_files(entry_path, result, visited=visited, depth=depth + 1)
             continue
         if not entry.is_file():
             continue

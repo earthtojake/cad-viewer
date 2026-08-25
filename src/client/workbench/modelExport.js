@@ -1,6 +1,6 @@
 import { entryKind } from "cadjs/lib/fileFormats.js";
 import { exportFormatsForRenderFormat } from "cadjs/lib/renderCapabilities.js";
-import { refreshCadCatalog } from "./cadManifestStore.js";
+import { readActiveCadDir, refreshCadCatalog } from "./cadManifestStore.js";
 
 // "Export model" formats for a STEP/assembly entry, in dropdown/menu order.
 export const STEP_EXPORT_FORMATS = Object.freeze(["step", "3mf", "stl", "glb"]);
@@ -79,8 +79,13 @@ export async function requestModelExport({ file, format } = {}) {
   if (!exportFormat) {
     throw new Error(`Unsupported export format: ${format || "(missing)"}`);
   }
+  let url = `/__cad/export?file=${encodeURIComponent(fileRef)}&format=${encodeURIComponent(exportFormat)}`;
+  const activeDir = readActiveCadDir();
+  if (activeDir) {
+    url += `&dir=${encodeURIComponent(activeDir)}`;
+  }
   const response = await fetch(
-    `/__cad/export?file=${encodeURIComponent(fileRef)}&format=${encodeURIComponent(exportFormat)}`,
+    url,
     { method: "POST" }
   );
   let payload = null;

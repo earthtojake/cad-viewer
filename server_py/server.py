@@ -2,8 +2,8 @@
 
 Serves the /__cad/* contract the client consumes: GET /__cad/server,
 GET /__cad/catalog, GET /__cad/asset, GET /__cad/download, GET /__cad/artifact,
-POST /__cad/artifact (build) and POST /__cad/export, plus the static dist/SPA and
-legacy Referer assets.
+POST /__cad/artifact (build), POST /__cad/export and POST /__cad/reveal, plus the
+static dist/SPA and legacy Referer assets.
 
 Run: python -m server_py.server [--port N] [--host H]
 
@@ -12,6 +12,11 @@ There is no served root. A page URL's PATH is the absolute directory to open
 reads it from location.pathname and passes it to /__cad/* as ?dir=. The bare
 origin names no directory, which the backend reads as the process cwd. The only
 paths that are NOT a directory are the bundle's /assets/* and the /__cad/* API.
+
+File routes (/__cad/asset, /__cad/download, /__cad/reveal and the legacy asset
+route) REQUIRE ?dir=: it is the containment root the backend verifies every file
+against, and a request that names no directory gets 400 rather than a file. Any
+other /__cad/* path answers 404 JSON instead of falling through to the SPA.
 
 Security / trust model: binds to loopback (127.0.0.1) and serves UNAUTHENTICATED.
 Any local process can read files under --dir (GET /__cad/asset), trigger STEP
@@ -26,6 +31,8 @@ import argparse
 import os
 import posixpath
 import re
+import shutil
+import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, parse_qs, unquote
@@ -88,6 +95,19 @@ def _server_info(root_dir: str = "") -> dict:
     )
 
 
+def reveal_command_for_path(file_path: str):
+    """The OS command that reveals `file_path` in the file manager, or None if the
+    platform has no reveal gesture. Splitting this out keeps the route testable:
+    tests stub it so reveal never launches a real file manager."""
+    if sys.platform == "darwin":
+        return ["open", "-R", file_path]
+    if sys.platform == "win32":
+        return ["explorer", f"/select,{file_path}"]
+    if sys.platform.startswith("linux"):
+        return ["xdg-open", os.path.dirname(file_path)]
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -101,18 +121,6 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
-
-    def _send_bytes(self, status: int, data: bytes, content_type: str, *, disposition: str | None = None):
-        self.send_response(status)
-        if content_type:
-            self.send_header("content-type", content_type)
-        if disposition:
-            self.send_header("content-disposition", disposition)
-        self.send_header("cache-control", "no-store")
-        self.send_header("content-length", str(len(data)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(data)
 
     def _query(self):
         parts = urlsplit(self.path)
@@ -142,6 +150,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._serve_asset(q, download=True)
             elif self._legacy_cad_asset(path, q):
                 pass  # served (or 403) by the legacy Referer-based handler
+            elif path.startswith("/__cad/"):
+                self._send_json(404, {"error": "Not found"})
             else:
                 self._serve_dist(path)
         except backend_mod.ForbiddenAssetError:
@@ -156,6 +166,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._artifact_build(q)
             elif path == "/__cad/export":
                 self._export(q)
+            elif path == "/__cad/reveal":
+                self._reveal_file(q)
             else:
                 self.send_response(405)
                 self.send_header("allow", "POST")
@@ -170,22 +182,41 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     # --- route bodies ---
+    def _stream_file(
+        self,
+        file_path: str,
+        content_type: str | None,
+        *,
+        status: int = 200,
+        disposition: str | None = None,
+    ) -> bool:
+        """Stream a file with no-store + content-length in 64 KiB chunks."""
+        if not os.path.isfile(file_path):
+            return False
+        try:
+            size = os.path.getsize(file_path)
+        except OSError:
+            return False
+        self.send_response(status)
+        if content_type:
+            self.send_header("content-type", content_type)
+        if disposition:
+            self.send_header("content-disposition", disposition)
+        self.send_header("cache-control", "no-store")
+        self.send_header("content-length", str(size))
+        self.end_headers()
+        if self.command != "HEAD":
+            try:
+                with open(file_path, "rb") as handle:
+                    shutil.copyfileobj(handle, self.wfile, length=64 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        return True
+
     def _serve_static_file(self, file_path: str, content_type: str | None) -> bool:
         """Stream a file with no-store + content-length, NO etag/last-modified/range.
         Returns False (no response written) if the path is missing/not a regular file."""
-        if not os.path.isfile(file_path):
-            return False
-        with open(file_path, "rb") as handle:
-            data = handle.read()
-        self.send_response(200)
-        if content_type:
-            self.send_header("content-type", content_type)
-        self.send_header("cache-control", "no-store")
-        self.send_header("content-length", str(len(data)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(data)
-        return True
+        return self._stream_file(file_path, content_type)
 
     def _request_referer_file_ref(self):
         value = self.headers.get("referer") or self.headers.get("referrer") or ""
@@ -213,6 +244,9 @@ class Handler(BaseHTTPRequestHandler):
         if not file_ref:
             return False
         root_dir = q.get("dir", "")
+        if not str(root_dir or "").strip():
+            self._send_json(400, {"error": "Missing directory"})
+            return True
         try:
             candidate = _Ctx.backend.asset_path_for_file_ref(file_ref, root_dir=root_dir)
         except backend_mod.ForbiddenAssetError:
@@ -293,18 +327,40 @@ class Handler(BaseHTTPRequestHandler):
             return
         file_ref = q.get("file", "")
         root_dir = q.get("dir", "")
-        resolved = _Ctx.backend.resolve_root(root_dir) if root_dir else None
+        if not str(root_dir or "").strip():
+            # The directory names the containment root for `file`. Without it the
+            # backend would have no root to verify a request against; the client
+            # always sends ?dir= (readActiveCadDir), so this only ever fires for
+            # hand-built or third-party requests.
+            self._send_json(400, {"error": "Missing directory"})
+            return
+        resolved = _Ctx.backend.resolve_root(root_dir)
         candidate = _Ctx.backend.asset_path_for_file_ref(file_ref, resolved_root=resolved, root_dir=root_dir)
         if not candidate or not os.path.isfile(candidate):
             self._send_json(404, {"error": "Not found"})
             return
-        with open(candidate, "rb") as handle:
-            data = handle.read()
         content_type = _Ctx.backend.content_type_for_path(candidate) or "application/octet-stream"
-        disposition = None
-        if download:
-            disposition = enc.attachment_content_disposition(os.path.basename(candidate))
-        self._send_bytes(200, data, content_type, disposition=disposition)
+        disposition = enc.attachment_content_disposition(os.path.basename(candidate)) if download else None
+        self._stream_file(candidate, content_type, disposition=disposition)
+
+    def _reveal_file(self, q):
+        # POST /__cad/reveal?file=<entry>&dir=<root>: reveal the entry's file in the OS
+        # file manager. Resolution goes through the SAME containment gate as every other
+        # file route, so reveal cannot be pointed at an arbitrary path.
+        file_ref = q.get("file", "")
+        root_dir = q.get("dir", "")
+        if not str(root_dir or "").strip():
+            self._send_json(400, {"error": "Missing directory"})
+            return
+        resolved = _Ctx.backend.resolve_root(root_dir)
+        candidate = _Ctx.backend.asset_path_for_file_ref(file_ref, resolved_root=resolved, root_dir=root_dir)
+        if not candidate or not os.path.exists(candidate):
+            self._send_json(404, {"error": "Not found"})
+            return
+        command = reveal_command_for_path(candidate)
+        if command:
+            subprocess.run(command, check=False)  # best effort; the viewer keeps working
+        self._send_json(200, {"ok": True})
 
     def _artifact_build(self, q):
         root_dir = q.get("dir", "")

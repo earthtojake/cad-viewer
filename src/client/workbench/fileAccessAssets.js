@@ -4,6 +4,7 @@ import {
   stripViewerRootDirPrefix,
   viewerRootRelativePath
 } from "./pathPresentation.js";
+import { readActiveCadDir } from "./cadManifestStore.js";
 import { fileKey } from "./sidebar.js";
 
 function basenameFromFileRef(value) {
@@ -171,7 +172,13 @@ export function fileAccessAssetsForEntry(entry, {
 }
 
 export function downloadUrlForFileAsset(fileRef, asset = "output", baseUrl = "") {
-  const path = `/__cad/download?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
+  let path = `/__cad/download?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
+  // The server requires the active directory to contain the file; without it the
+  // request is rejected outright (400).
+  const activeDir = readActiveCadDir();
+  if (activeDir) {
+    path += `&dir=${encodeURIComponent(activeDir)}`;
+  }
   if (!baseUrl) {
     return path;
   }
@@ -183,7 +190,11 @@ export function downloadUrlForFileAsset(fileRef, asset = "output", baseUrl = "")
 }
 
 export function openUrlForFileAsset(fileRef, asset = "output", baseUrl = "") {
-  const path = `/__cad/reveal?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
+  let path = `/__cad/reveal?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
+  const activeDir = readActiveCadDir();
+  if (activeDir) {
+    path += `&dir=${encodeURIComponent(activeDir)}`;
+  }
   if (!baseUrl) {
     return path;
   }

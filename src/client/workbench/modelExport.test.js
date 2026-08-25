@@ -66,3 +66,24 @@ test("requestModelExport surfaces a cancelled dialog without throwing", async ()
     globalThis.fetch = originalFetch;
   }
 });
+
+test("requestModelExport sends the active directory so the root can contain the file", async () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { href: "http://127.0.0.1:4179/Users/me/models" } };
+  let capturedUrl = "";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    capturedUrl = String(url);
+    return {
+      ok: true,
+      json: async () => ({ ok: true, path: "/dest/widget.glb", filename: "widget.glb", format: "glb" }),
+    };
+  };
+  try {
+    await requestModelExport({ file: "/m/x.step", format: "glb" });
+    assert.ok(capturedUrl.includes("dir=%2FUsers%2Fme%2Fmodels"), `dir missing: ${capturedUrl}`);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.window = originalWindow;
+  }
+});

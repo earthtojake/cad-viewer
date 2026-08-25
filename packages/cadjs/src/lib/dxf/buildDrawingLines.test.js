@@ -111,3 +111,49 @@ test("bounds cover the drawing, for fitting a camera with no mesh to measure", (
   assert.equal(bounds.max[2], 425);
   assert.equal(drawingLineBounds({ layers: [] }), null);
 });
+
+function arcXRange(arc) {
+  const groups = buildDxfDrawingLineGroups({ geometry: { arcs: [arc], lines: [], circles: [] } });
+  const positions = groups.layers[0].positions;
+  const xs = [];
+  for (let index = 0; index < positions.length; index += 3) {
+    xs.push(positions[index]);
+  }
+  return [Math.min(...xs), Math.max(...xs)];
+}
+
+// parseDxf and drawing_render.py emit startAngleDeg/sweepAngleDeg. Reading
+// only startAngle/endAngle left both at 0, so every arc swept a full turn.
+test("an arc in the parser's angle keys keeps its sweep", () => {
+  const [minX, maxX] = arcXRange({
+    layer: "DIMS", center: [0, 0], radius: 10, startAngleDeg: 0, sweepAngleDeg: 90,
+  });
+
+  assert.ok(minX >= -0.001, `quarter arc should stay in x >= 0, got ${minX}`);
+  assert.ok(Math.abs(maxX - 10) < 0.001);
+});
+
+test("a full circle in the parser's angle keys still closes", () => {
+  const [minX, maxX] = arcXRange({
+    layer: "DIMS", center: [0, 0], radius: 10, startAngleDeg: 0, sweepAngleDeg: 360,
+  });
+
+  assert.ok(Math.abs(minX + 10) < 0.001);
+  assert.ok(Math.abs(maxX - 10) < 0.001);
+});
+
+test("the legacy start/end angle shape is still honoured", () => {
+  const [minX, maxX] = arcXRange({
+    layer: "DIMS", center: [0, 0], radius: 10, startAngle: 0, endAngle: 90,
+  });
+
+  assert.ok(minX >= -0.001);
+  assert.ok(Math.abs(maxX - 10) < 0.001);
+});
+
+test("an arc with no angles at all still yields a closed circle", () => {
+  const [minX, maxX] = arcXRange({ layer: "DIMS", center: [0, 0], radius: 10 });
+
+  assert.ok(Math.abs(minX + 10) < 0.001);
+  assert.ok(Math.abs(maxX - 10) < 0.001);
+});

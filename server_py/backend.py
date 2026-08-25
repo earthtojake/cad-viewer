@@ -196,16 +196,22 @@ class LocalAssetBackend:
         candidate = os.path.abspath(normalized)
         if not scanner.is_served_cad_asset(candidate):
             return None
-        active = resolved_root or (self.resolve_root(root_dir) if root_dir else None)
-        if active:
-            if not (candidate == active["rootPath"] or scanner.path_is_inside(candidate, active["rootPath"])):
-                raise ForbiddenAssetError("Forbidden")
-            # Hidden (dot-prefixed) directories below the served root are never served;
-            # only root-relative components are checked so a root that itself lives under
-            # a hidden absolute path still works.
-            relative = os.path.relpath(candidate, active["rootPath"])
-            if any(part.startswith(".") for part in relative.split(os.sep) if part and part != ".."):
-                return None
+        # A file is never served without a directory to contain it. The missing-root
+        # case used to skip the containment check entirely, so a local process could
+        # read any CAD file on disk with `?file=<absolute path>` and no ?dir=.
+        active = resolved_root
+        if active is None:
+            if not str(root_dir or "").strip():
+                raise ValueError("CAD Viewer directory is required")
+            active = self.resolve_root(root_dir)
+        if not (candidate == active["rootPath"] or scanner.path_is_inside(candidate, active["rootPath"])):
+            raise ForbiddenAssetError("Forbidden")
+        # Hidden (dot-prefixed) directories below the served root are never served;
+        # only root-relative components are checked so a root that itself lives under
+        # a hidden absolute path still works.
+        relative = os.path.relpath(candidate, active["rootPath"])
+        if any(part.startswith(".") for part in relative.split(os.sep) if part and part != ".."):
+            return None
         return candidate
 
     def content_type_for_path(self, file_path: str) -> str:

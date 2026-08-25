@@ -38,14 +38,28 @@ function sampleArc(target, arc, elevation, requested) {
   if (!Number.isFinite(radius) || radius <= 0) {
     return;
   }
-  const start = Number(arc.startAngle ?? arc.start_angle ?? 0);
-  const end = Number(arc.endAngle ?? arc.end_angle ?? 0);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+  // parseDxf and drawing_render.py both emit startAngleDeg/sweepAngleDeg.
+  // Reading only startAngle/endAngle left start and end at 0 for every real
+  // arc, so sweep came out 0, the wrap below turned it into a full turn, and
+  // each arc was drawn as a complete circle.
+  const start = Number(arc.startAngleDeg ?? arc.startAngle ?? arc.start_angle ?? 0);
+  if (!Number.isFinite(start)) {
     return;
   }
   // Angles arrive in degrees, counter-clockwise, as DXF stores them.
   const startRadians = (start * Math.PI) / 180;
-  let sweep = ((end - start) * Math.PI) / 180;
+  let sweep;
+  const sweepDeg = Number(arc.sweepAngleDeg ?? arc.sweep_angle_deg);
+  if (Number.isFinite(sweepDeg) && sweepDeg !== 0) {
+    // Both producers guarantee a non-zero sweep in (0, 360].
+    sweep = (sweepDeg * Math.PI) / 180;
+  } else {
+    const end = Number(arc.endAngle ?? arc.end_angle ?? 0);
+    if (!Number.isFinite(end)) {
+      return;
+    }
+    sweep = ((end - start) * Math.PI) / 180;
+  }
   if (sweep <= 0) {
     sweep += Math.PI * 2;
   }

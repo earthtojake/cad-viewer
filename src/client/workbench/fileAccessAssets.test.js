@@ -126,6 +126,26 @@ test("file access open URLs target the local reveal endpoint", () => {
   );
 });
 
+test("file access URLs carry the active directory the server contains files against", () => {
+  // The server rejects file routes without ?dir= (missing containment root), so the
+  // builders must append the page's directory. URL building without a window leaves
+  // the dir off (the headless/review flows never hit these routes).
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { href: "http://127.0.0.1:4179/Users/me/models" } };
+  try {
+    assert.equal(
+      downloadUrlForFileAsset("assemblies/robot arm.step", "source"),
+      "/__cad/download?file=assemblies%2Frobot%20arm.step&asset=source&dir=%2FUsers%2Fme%2Fmodels"
+    );
+    assert.equal(
+      openUrlForFileAsset("assemblies/robot arm.step", "source"),
+      "/__cad/reveal?file=assemblies%2Frobot%20arm.step&asset=source&dir=%2FUsers%2Fme%2Fmodels"
+    );
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
 test("file access copy targets include absolute and directory-relative local paths", () => {
   const targets = copyTargetsForFileAccessAsset({
     rootRelativePath: "assemblies/robot-arm/robot-arm.step",
