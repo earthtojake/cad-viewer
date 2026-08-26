@@ -9,10 +9,12 @@ launcher only reports a URL for the cwd it happens to run in.
 """
 
 import contextlib
+import errno
 import io
 import json
 import os
 import pathlib
+import socket
 import sys
 import tempfile
 import unittest
@@ -21,6 +23,49 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
 from server_py import start_viewer as sav  # noqa: E402
+
+
+class PortProbeTests(unittest.TestCase):
+    """port_is_free answers by BINDING, because binding is what the server will do.
+
+    The connect-based probe this replaced treated every non-refusal as occupied,
+    and on Windows a connect to a closed port routinely fails without a refusal
+    (Hyper-V/WSL port exclusions, loopback filtering) -- so the launcher reported
+    "already in use" for every port and refused to start. Found by the packaged
+    viewer smoke on Windows CI, where four random ports Python had just bound all
+    "failed" the connect probe (#335).
+    """
+
+    def test_a_bindable_port_is_free(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        # Closed again: bindable, so free. The old probe would also have said
+        # free here on POSIX; this pins the new mechanism agrees.
+        self.assertTrue(sav.port_is_free("127.0.0.1", port))
+
+    def test_a_listening_port_is_occupied(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port = listener.getsockname()[1]
+            self.assertFalse(sav.port_is_free("127.0.0.1", port))
+
+    def test_an_ambiguous_probe_error_never_blocks_a_launch(self):
+        # The probe exists only for a friendly message. When it cannot tell (a
+        # timeout, a filtered socket, any OSError that is not a definite
+        # in-use/excluded answer), the launch must proceed and the server's own
+        # bind stays authoritative. This is the exact Windows failure shape.
+        for exc in (TimeoutError("timed out"), OSError(errno.ECONNRESET, "reset")):
+            with mock.patch.object(sav.socket, "socket") as socket_factory:
+                socket_factory.return_value.__enter__.return_value.bind.side_effect = exc
+                self.assertTrue(sav.port_is_free("127.0.0.1", 3245), exc)
+
+    def test_definite_in_use_and_excluded_answers_still_block(self):
+        for code in (errno.EADDRINUSE, errno.EACCES):
+            with mock.patch.object(sav.socket, "socket") as socket_factory:
+                socket_factory.return_value.__enter__.return_value.bind.side_effect = OSError(code, "nope")
+                self.assertFalse(sav.port_is_free("127.0.0.1", 3245), errno.errorcode[code])
 
 
 class _FakeChild:

@@ -21,6 +21,7 @@ Run: python -m server_py.start_viewer [--port N] [--json]
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import socket
@@ -37,7 +38,6 @@ else:
     from .paths import url_path_from_filesystem_path
     from .server_info import DEFAULT_VIEWER_PORT, DEFAULT_VIEWER_HOST
 
-_PROBE_TIMEOUT_S = 0.35
 _VIEWER_APP_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
@@ -53,16 +53,27 @@ def viewer_url(host: str, port: int, directory: str = "") -> str:
 
 
 def port_is_free(host: str, port: int) -> bool:
-    """True only when nothing is listening on host:port (connection refused). A
-    live listener — or an ambiguous/unreachable socket — counts as occupied, so
-    we never race a bind against another process."""
+    """True when this process can bind host:port -- the same operation the server
+    is about to perform, so the probe cannot disagree with reality.
+
+    This used to probe by CONNECTING, with only ConnectionRefusedError counting
+    as free. On Windows a connect to a closed port routinely fails some other
+    way (Hyper-V/WSL port exclusions, loopback filtering, refusals arriving as
+    timeouts), so every port read as occupied and the launcher refused to start
+    with a false "already in use" -- found by #335's Windows smoke, where four
+    random ports Python had just bound all "failed" the connect probe.
+
+    A definite EADDRINUSE (and EACCES, Windows's answer for its excluded port
+    ranges) keeps the friendly rerun-with---port message. Any other error counts
+    as FREE: this probe exists only for that message, and a probe that cannot
+    tell must never block a launch -- the server's own bind stays authoritative
+    and reports anything genuinely wrong."""
     try:
-        with socket.create_connection((host, port), timeout=_PROBE_TIMEOUT_S):
-            return False
-    except ConnectionRefusedError:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, port))
         return True
-    except OSError:
-        return False
+    except OSError as exc:
+        return exc.errno not in (errno.EADDRINUSE, errno.EACCES)
 
 
 def spawn_backend(host: str, port: int):

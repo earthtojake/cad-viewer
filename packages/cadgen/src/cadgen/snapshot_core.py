@@ -772,7 +772,8 @@ class BatchSnapshotRenderer:
             except ImportError as exc:
                 raise SnapshotError(
                     "CAD snapshot requires the Python playwright package. "
-                    "Install the CAD skill requirements, then run `python -m playwright install chromium` if needed."
+                    "Install the invoking skill's own requirements.txt (it ships playwright), "
+                    "then run `python -m playwright install chromium` if needed."
                 ) from exc
             self.playwright = await async_playwright().start()
             self.browser = await self.playwright.chromium.launch(

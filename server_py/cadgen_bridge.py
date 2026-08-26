@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 
 _PYTHONPATH_REL_CANDIDATES = [
     os.path.join("scripts", "packages", "cadgen", "src"),
@@ -118,22 +119,37 @@ def require_cadgen_runtime(repo_root: str) -> dict:
     )
 
 
-def run_cadgen(module: str, args, repo_root: str) -> dict:
+# The cold subprocess is killed after this many seconds with NO output on either
+# pipe, not after so many seconds of work -- same idleness rule as the warm
+# worker (VIEWER_CADGEN_IDLE_TIMEOUT; <= 0 disables). A hung process is silent;
+# a healthy build narrates phases on stderr and lives as long as it needs.
+_DEFAULT_CADGEN_IDLE_SECONDS = float(os.environ.get("VIEWER_CADGEN_IDLE_TIMEOUT", "300"))
+
+
+def run_cadgen(module: str, args, repo_root: str, timeout: float | None = None) -> dict:
     """Run a cadgen build/export op and return its payload dict (``{ok:false,error}``
     on failure). Prefers the warm worker; falls back to a cold subprocess on any
     worker spawn/transport fault so the path is always available."""
     try:
         from . import worker_client
 
-        return worker_client.run_cadgen(module, args, repo_root)
+        return worker_client.run_cadgen(module, args, repo_root, timeout=timeout)
     except worker_client._WorkerError:
         pass  # worker disabled or faulted -> cold subprocess below
-    return run_cadgen_cold(module, args, repo_root)
+    return run_cadgen_cold(module, args, repo_root, timeout=timeout)
 
 
-def run_cadgen_cold(module: str, args, repo_root: str) -> dict:
+def run_cadgen_cold(module: str, args, repo_root: str, timeout: float | None = None) -> dict:
     """Run `python -m <module> <args>` in a fresh subprocess and return the last
-    stdout JSON line as a dict, or {ok:false,error} on failure."""
+    stdout JSON line as a dict, or {ok:false,error} on failure.
+
+    ``timeout`` bounds IDLENESS: both pipes are drained as the build runs (which a
+    plain capture_output cannot do without risking a full-pipe block), every line
+    read counts as life, and only a subprocess that produces nothing at all for the
+    whole budget is killed."""
+    import contextlib
+    import time
+
     env = dict(os.environ)
     pythonpath = cadgen_pythonpath(repo_root)
     if pythonpath:
@@ -141,19 +157,64 @@ def run_cadgen_cold(module: str, args, repo_root: str) -> dict:
     # Byte-deterministic artifacts (drawing packages are content-addressed):
     # ezdxf's object ordering depends on Python hash randomization.
     env.setdefault("PYTHONHASHSEED", "0")
+    idle = _DEFAULT_CADGEN_IDLE_SECONDS if timeout is None else timeout
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, "-m", module, *args],
-            cwd=repo_root, env=env, capture_output=True, text=True,
+            cwd=repo_root if repo_root and os.path.isdir(repo_root) else None,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
-    for line in reversed(proc.stdout.splitlines()):
+
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    last_activity = [time.monotonic()]
+
+    def _pump(stream, sink: list[str] | None):
+        try:
+            for line in iter(stream.readline, ""):
+                last_activity[0] = time.monotonic()
+                if sink is not None:
+                    sink.append(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            with contextlib.suppress(OSError, ValueError):
+                stream.close()
+
+    threads = [
+        threading.Thread(target=_pump, args=(proc.stdout, stdout_lines), daemon=True),
+        threading.Thread(target=_pump, args=(proc.stderr, stderr_lines), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    while proc.poll() is None:
+        quiet_for = time.monotonic() - last_activity[0]
+        if idle > 0 and quiet_for > idle:
+            proc.kill()
+            proc.wait()
+            return {
+                "ok": False,
+                "error": (
+                    f"cadgen {module} went silent for {quiet_for:.1f}s "
+                    "(no response and no output); killed"
+                ),
+            }
+        time.sleep(0.05)
+    for thread in threads:
+        thread.join(timeout=5)
+
+    for line in reversed(stdout_lines):
         stripped = line.strip()
         if stripped.startswith("{"):
             try:
                 return json.loads(stripped)
             except ValueError:
                 break
-    message = (proc.stderr or proc.stdout or f"cadgen {module} exited with code {proc.returncode}").strip()
+    message = ("".join(stderr_lines) or "".join(stdout_lines) or f"cadgen {module} exited with code {proc.returncode}").strip()
     return {"ok": False, "exitCode": proc.returncode, "error": message}
